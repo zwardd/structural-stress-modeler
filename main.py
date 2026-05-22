@@ -1,6 +1,7 @@
 import pygame
 import sys
 from truss_model import TrussSystem
+from matrix_solver import solve_truss
 
 pygame.init()
 
@@ -19,7 +20,7 @@ COLOR_NODE       = (59, 130, 246)
 COLOR_BEAM       = (113, 113, 122)  
 COLOR_PIN        = (34, 197, 94)    
 COLOR_ROLLER     = (234, 179, 8)    
-COLOR_LOAD       = (239, 68, 68)  
+COLOR_LOAD       = (239, 68, 68)    
 
 font_header = pygame.font.SysFont("Helvetica", 24, bold=True)
 font_body = pygame.font.SysFont("Helvetica", 16)
@@ -30,6 +31,9 @@ truss = TrussSystem()
 selected_node = None
 CLICK_TOLERANCE = 12
 NODE_RADIUS = 6
+
+# Structural steel yield limit point (250 Megapascals)
+STEEL_YIELD_STRESS = 250e6
 
 is_running = True
 while is_running:
@@ -54,14 +58,11 @@ while is_running:
                     break
 
             if event.button == 1:  
-                # Check keyboard modifiers for force application
                 keys = pygame.key.get_pressed()
                 if keys[pygame.K_l] and clicked_node_idx is not None:
-                    # Apply a static 10kN point load downward
                     truss.nodes[clicked_node_idx].load_y += 10000.0
                     selected_node = None
                 else:
-                    # Standard node creation / connection logic
                     if clicked_node_idx is not None:
                         if selected_node is None:
                             selected_node = clicked_node_idx
@@ -76,6 +77,9 @@ while is_running:
                 if clicked_node_idx is not None:
                     truss.nodes[clicked_node_idx].toggle_support()
                     selected_node = None
+
+    # Compute Global Matrix Displacements and Element Tension/Compression Stresses
+    solve_truss(truss)
 
     screen.fill(COLOR_BACKGROUND)
 
@@ -94,7 +98,6 @@ while is_running:
     for i, node in enumerate(truss.nodes):
         total_applied_load += node.load_y
         
-        # Render static load vectors if present
         if node.load_y > 0:
             arrow_start = (node.x, node.y - 10)
             arrow_end = (node.x, node.y - 35)
@@ -124,14 +127,25 @@ while is_running:
     header_surface = font_header.render("SYSTEM METRICS", True, COLOR_TEXT_MAIN)
     screen.blit(header_surface, (740, 40))
 
-    # Convert raw Newtons to kilonewtons
+    # Evaluate max stress utilization scaling factor across structural layout
+    max_stress_observed = 0.0
+    for beam in truss.beams:
+        max_stress_observed = max(max_stress_observed, abs(beam.stress))
+    
+    utilization_pct = (max_stress_observed / STEEL_YIELD_STRESS) * 100.0
+    safety_status = "NOMINAL"
+    if utilization_pct > 100.0:
+        safety_status = "CRITICAL FAILURE"
+    elif utilization_pct > 75.0:
+        safety_status = "WARNING"
+
     load_kn = total_applied_load / 1000.0
     metrics = [
         f"Total Nodes: {len(truss.nodes)}",
         f"Structural Beams: {len(truss.beams)}",
         f"Applied Load: {load_kn:.2f} kN",
-        "Max Material Stress: 0.0%",
-        "Safety Status: NOMINAL"
+        f"Max Material Stress: {utilization_pct:.1f}%",
+        f"Safety Status: {safety_status}"
     ]
 
     text_y_position = 90
