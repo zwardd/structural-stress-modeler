@@ -5,13 +5,6 @@ from truss_model import TrussSystem
 pygame.init()
 
 WINDOW_WIDTH = 1000
-import pygame
-import sys
-from truss_model import TrussSystem
-
-pygame.init()
-
-WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 700
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption("Structural Stress Modeler - 2D Truss Analysis")
@@ -25,7 +18,8 @@ COLOR_TEXT_MAIN  = (244, 244, 245)
 COLOR_NODE       = (59, 130, 246)   
 COLOR_BEAM       = (113, 113, 122)  
 COLOR_PIN        = (34, 197, 94)    
-COLOR_ROLLER     = (234, 179, 8)  
+COLOR_ROLLER     = (234, 179, 8)    
+COLOR_LOAD       = (239, 68, 68)  
 
 font_header = pygame.font.SysFont("Helvetica", 24, bold=True)
 font_body = pygame.font.SysFont("Helvetica", 16)
@@ -59,18 +53,26 @@ while is_running:
                     clicked_node_idx = i
                     break
 
-            if event.button == 1:  # Left Click: Create/Connect
-                if clicked_node_idx is not None:
-                    if selected_node is None:
-                        selected_node = clicked_node_idx
-                    else:
-                        truss.add_beam(selected_node, clicked_node_idx)
-                        selected_node = None
-                else:
-                    truss.add_node(mouse_pos[0], mouse_pos[1])
+            if event.button == 1:  
+                # Check keyboard modifiers for force application
+                keys = pygame.key.get_pressed()
+                if keys[pygame.K_l] and clicked_node_idx is not None:
+                    # Apply a static 10kN point load downward
+                    truss.nodes[clicked_node_idx].load_y += 10000.0
                     selected_node = None
+                else:
+                    # Standard node creation / connection logic
+                    if clicked_node_idx is not None:
+                        if selected_node is None:
+                            selected_node = clicked_node_idx
+                        else:
+                            truss.add_beam(selected_node, clicked_node_idx)
+                            selected_node = None
+                    else:
+                        truss.add_node(mouse_pos[0], mouse_pos[1])
+                        selected_node = None
 
-            elif event.button == 3:  # Right Click: Toggle Boundary Supports
+            elif event.button == 3:  
                 if clicked_node_idx is not None:
                     truss.nodes[clicked_node_idx].toggle_support()
                     selected_node = None
@@ -87,23 +89,30 @@ while is_running:
         end_node = truss.nodes[beam.node_b]
         pygame.draw.line(screen, COLOR_BEAM, (start_node.x, start_node.y), (end_node.x, end_node.y), 3)
 
-    # Render Active Nodes and Support Geometry
+    # Render Active Nodes, Supports, and Loads
+    total_applied_load = 0.0
     for i, node in enumerate(truss.nodes):
+        total_applied_load += node.load_y
+        
+        # Render static load vectors if present
+        if node.load_y > 0:
+            arrow_start = (node.x, node.y - 10)
+            arrow_end = (node.x, node.y - 35)
+            pygame.draw.line(screen, COLOR_LOAD, arrow_start, arrow_end, 3)
+            pygame.draw.polygon(screen, COLOR_LOAD, [arrow_start, (node.x - 5, node.y - 18), (node.x + 5, node.y - 18)])
+
         if node.is_anchor_x and node.is_anchor_y:
-            # Draw Pin Support
             pt1 = (node.x, node.y)
             pt2 = (node.x - 10, node.y + 14)
             pt3 = (node.x + 10, node.y + 14)
             pygame.draw.polygon(screen, COLOR_PIN, [pt1, pt2, pt3])
         elif node.is_anchor_y and not node.is_anchor_x:
-            # Draw Roller Support 
             pt1 = (node.x, node.y)
             pt2 = (node.x - 10, node.y + 10)
             pt3 = (node.x + 10, node.y + 10)
             pygame.draw.polygon(screen, COLOR_ROLLER, [pt1, pt2, pt3])
             pygame.draw.line(screen, COLOR_ROLLER, (node.x - 10, node.y + 14), (node.x + 10, node.y + 14), 2)
         else:
-            # Draw Standard Free Node
             color = (234, 179, 8) if i == selected_node else COLOR_NODE
             pygame.draw.circle(screen, color, (node.x, node.y), NODE_RADIUS)
 
@@ -115,10 +124,12 @@ while is_running:
     header_surface = font_header.render("SYSTEM METRICS", True, COLOR_TEXT_MAIN)
     screen.blit(header_surface, (740, 40))
 
+    # Convert raw Newtons to kilonewtons
+    load_kn = total_applied_load / 1000.0
     metrics = [
         f"Total Nodes: {len(truss.nodes)}",
         f"Structural Beams: {len(truss.beams)}",
-        "Applied Load: 0.00 kN",
+        f"Applied Load: {load_kn:.2f} kN",
         "Max Material Stress: 0.0%",
         "Safety Status: NOMINAL"
     ]
