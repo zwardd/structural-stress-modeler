@@ -9,14 +9,28 @@ class Node:
         self.load_x = 0.0
         self.load_y = 0.0
 
+    def toggle_support(self):
+        if not self.is_anchor_x and not self.is_anchor_y:
+            # Switch to Pin Support (Fixed X and Y)
+            self.is_anchor_x = True
+            self.is_anchor_y = True
+        elif self.is_anchor_x and self.is_anchor_y:
+            # Switch to Roller Support (Fixed Y only)
+            self.is_anchor_x = False
+            self.is_anchor_y = True
+        else:
+            # Reset to free node
+            self.is_anchor_x = False
+            self.is_anchor_y = False
+
 class Beam:
     def __init__(self, node_a_idx, node_b_idx):
         self.node_a = node_a_idx
         self.node_b = node_b_idx
-        self.area = 0.002        # Cross-sectional area in square meters
-        self.modulus = 200e9     # Young's Modulus for structural steel (Pascals)
-        self.force = 0.0         # Internal calculated force (Newtons)
-        self.stress = 0.0        # Calculated internal stress (Pascals)
+        self.area = 0.002        
+        self.modulus = 200e9     
+        self.force = 0.0         
+        self.stress = 0.0        
 
 class TrussSystem:
     def __init__(self):
@@ -28,7 +42,6 @@ class TrussSystem:
 
     def add_beam(self, a_idx, b_idx):
         if a_idx != b_idx:
-            # Prevent duplicate beam structures
             for beam in self.beams:
                 if {beam.node_a, beam.node_b} == {a_idx, b_idx}:
                     return False

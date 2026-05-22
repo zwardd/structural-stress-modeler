@@ -5,6 +5,13 @@ from truss_model import TrussSystem
 pygame.init()
 
 WINDOW_WIDTH = 1000
+import pygame
+import sys
+from truss_model import TrussSystem
+
+pygame.init()
+
+WINDOW_WIDTH = 1000
 WINDOW_HEIGHT = 700
 screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
 pygame.display.set_caption("Structural Stress Modeler - 2D Truss Analysis")
@@ -17,13 +24,13 @@ COLOR_UI_BORDER  = (63, 63, 70)
 COLOR_TEXT_MAIN  = (244, 244, 245)    
 COLOR_NODE       = (59, 130, 246)   
 COLOR_BEAM       = (113, 113, 122)  
+COLOR_PIN        = (34, 197, 94)    
+COLOR_ROLLER     = (234, 179, 8)  
 
 font_header = pygame.font.SysFont("Helvetica", 24, bold=True)
 font_body = pygame.font.SysFont("Helvetica", 16)
 
 clock = pygame.time.Clock()
-
-# Instantiate Physics Engine Data Structure
 truss = TrussSystem()
 
 selected_node = None
@@ -41,28 +48,32 @@ while is_running:
             is_running = False
             
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            if event.button == 1:  
-                mouse_pos = event.pos
-                
-                if sim_rect.collidepoint(mouse_pos):
-                    clicked_node_idx = None
-                    
-                    # Scan object coordinates using class attributes
-                    for i, node in enumerate(truss.nodes):
-                        distance = pygame.math.Vector2(node.x, node.y).distance_to(mouse_pos)
-                        if distance < CLICK_TOLERANCE:
-                            clicked_node_idx = i
-                            break
-                    
-                    if clicked_node_idx is not None:
-                        if selected_node is None:
-                            selected_node = clicked_node_idx
-                        else:
-                            truss.add_beam(selected_node, clicked_node_idx)
-                            selected_node = None
+            mouse_pos = event.pos
+            if not sim_rect.collidepoint(mouse_pos):
+                continue
+
+            clicked_node_idx = None
+            for i, node in enumerate(truss.nodes):
+                distance = pygame.math.Vector2(node.x, node.y).distance_to(mouse_pos)
+                if distance < CLICK_TOLERANCE:
+                    clicked_node_idx = i
+                    break
+
+            if event.button == 1:  # Left Click: Create/Connect
+                if clicked_node_idx is not None:
+                    if selected_node is None:
+                        selected_node = clicked_node_idx
                     else:
-                        truss.add_node(mouse_pos[0], mouse_pos[1])
+                        truss.add_beam(selected_node, clicked_node_idx)
                         selected_node = None
+                else:
+                    truss.add_node(mouse_pos[0], mouse_pos[1])
+                    selected_node = None
+
+            elif event.button == 3:  # Right Click: Toggle Boundary Supports
+                if clicked_node_idx is not None:
+                    truss.nodes[clicked_node_idx].toggle_support()
+                    selected_node = None
 
     screen.fill(COLOR_BACKGROUND)
 
@@ -76,10 +87,25 @@ while is_running:
         end_node = truss.nodes[beam.node_b]
         pygame.draw.line(screen, COLOR_BEAM, (start_node.x, start_node.y), (end_node.x, end_node.y), 3)
 
-    # Render Active Nodes
+    # Render Active Nodes and Support Geometry
     for i, node in enumerate(truss.nodes):
-        color = (234, 179, 8) if i == selected_node else COLOR_NODE
-        pygame.draw.circle(screen, color, (node.x, node.y), NODE_RADIUS)
+        if node.is_anchor_x and node.is_anchor_y:
+            # Draw Pin Support
+            pt1 = (node.x, node.y)
+            pt2 = (node.x - 10, node.y + 14)
+            pt3 = (node.x + 10, node.y + 14)
+            pygame.draw.polygon(screen, COLOR_PIN, [pt1, pt2, pt3])
+        elif node.is_anchor_y and not node.is_anchor_x:
+            # Draw Roller Support 
+            pt1 = (node.x, node.y)
+            pt2 = (node.x - 10, node.y + 10)
+            pt3 = (node.x + 10, node.y + 10)
+            pygame.draw.polygon(screen, COLOR_ROLLER, [pt1, pt2, pt3])
+            pygame.draw.line(screen, COLOR_ROLLER, (node.x - 10, node.y + 14), (node.x + 10, node.y + 14), 2)
+        else:
+            # Draw Standard Free Node
+            color = (234, 179, 8) if i == selected_node else COLOR_NODE
+            pygame.draw.circle(screen, color, (node.x, node.y), NODE_RADIUS)
 
     # Render Side UI Panel
     pygame.draw.rect(screen, COLOR_PANEL_BG, panel_rect, border_radius=8)
