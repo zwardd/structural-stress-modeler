@@ -1,5 +1,6 @@
 import pygame
 import sys
+from truss_model import TrussSystem
 
 pygame.init()
 
@@ -15,20 +16,19 @@ COLOR_PANEL_BG   = (18, 18, 20)
 COLOR_UI_BORDER  = (63, 63, 70)      
 COLOR_TEXT_MAIN  = (244, 244, 245)    
 COLOR_NODE       = (59, 130, 246)   
-COLOR_BEAM       = (113, 113, 122)
+COLOR_BEAM       = (113, 113, 122)  
 
 font_header = pygame.font.SysFont("Helvetica", 24, bold=True)
 font_body = pygame.font.SysFont("Helvetica", 16)
 
 clock = pygame.time.Clock()
 
-# Structural Data Arrays
-nodes = []  
-beams = []  
+# Instantiate Physics Engine Data Structure
+truss = TrussSystem()
 
 selected_node = None
-NODE_RADIUS = 6
 CLICK_TOLERANCE = 12
+NODE_RADIUS = 6
 
 is_running = True
 while is_running:
@@ -45,10 +45,11 @@ while is_running:
                 mouse_pos = event.pos
                 
                 if sim_rect.collidepoint(mouse_pos):
-                    # Check if clicking an existing node
                     clicked_node_idx = None
-                    for i, node in enumerate(nodes):
-                        distance = pygame.math.Vector2(node).distance_to(mouse_pos)
+                    
+                    # Scan object coordinates using class attributes
+                    for i, node in enumerate(truss.nodes):
+                        distance = pygame.math.Vector2(node.x, node.y).distance_to(mouse_pos)
                         if distance < CLICK_TOLERANCE:
                             clicked_node_idx = i
                             break
@@ -57,17 +58,10 @@ while is_running:
                         if selected_node is None:
                             selected_node = clicked_node_idx
                         else:
-                            # Connect nodes if a different one is selected
-                            if selected_node != clicked_node_idx:
-                                new_beam = (selected_node, clicked_node_idx)
-                                # Avoid duplicate tracking
-                                reverse_beam = (clicked_node_idx, selected_node)
-                                if new_beam not in beams and reverse_beam not in beams:
-                                    beams.append(new_beam)
-                            selected_node = None # Deselect
+                            truss.add_beam(selected_node, clicked_node_idx)
+                            selected_node = None
                     else:
-                        # Drop a new node if clicking empty space
-                        nodes.append(mouse_pos)
+                        truss.add_node(mouse_pos[0], mouse_pos[1])
                         selected_node = None
 
     screen.fill(COLOR_BACKGROUND)
@@ -77,16 +71,15 @@ while is_running:
     pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
 
     # Render Active Beams
-    for beam in beams:
-        start_pos = nodes[beam[0]]
-        end_pos = nodes[beam[1]]
-        pygame.draw.line(screen, COLOR_BEAM, start_pos, end_pos, 3)
+    for beam in truss.beams:
+        start_node = truss.nodes[beam.node_a]
+        end_node = truss.nodes[beam.node_b]
+        pygame.draw.line(screen, COLOR_BEAM, (start_node.x, start_node.y), (end_node.x, end_node.y), 3)
 
     # Render Active Nodes
-    for i, node in enumerate(nodes):
-        # Highlight node if currently selected for a beam connection
+    for i, node in enumerate(truss.nodes):
         color = (234, 179, 8) if i == selected_node else COLOR_NODE
-        pygame.draw.circle(screen, color, node, NODE_RADIUS)
+        pygame.draw.circle(screen, color, (node.x, node.y), NODE_RADIUS)
 
     # Render Side UI Panel
     pygame.draw.rect(screen, COLOR_PANEL_BG, panel_rect, border_radius=8)
@@ -97,8 +90,8 @@ while is_running:
     screen.blit(header_surface, (740, 40))
 
     metrics = [
-        f"Total Nodes: {len(nodes)}",
-        f"Structural Beams: {len(beams)}",
+        f"Total Nodes: {len(truss.nodes)}",
+        f"Structural Beams: {len(truss.beams)}",
         "Applied Load: 0.00 kN",
         "Max Material Stress: 0.0%",
         "Safety Status: NOMINAL"
