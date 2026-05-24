@@ -3,7 +3,10 @@ import math
 
 def solve_truss(truss):
     num_nodes = len(truss.nodes)
-    if num_nodes == 0 or len(truss.beams) == 0:
+    if num_nodes < 2 or len(truss.beams) == 0:
+        for beam in truss.beams:
+            beam.force = 0.0
+            beam.stress = 0.0
         return
 
     matrix_dim = num_nodes * 2
