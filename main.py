@@ -53,8 +53,13 @@ MATERIAL_SPECS = {
 def get_stress_color(beam):
     if beam.force == 0.0:
         return COLOR_ZERO_LOAD
+        
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
-    utilization = min(abs(beam.stress) / specs["yield"], 1.0)
+    utilization = abs(beam.stress) / specs["yield"]
+    
+    if utilization >= 1.0:
+        return COLOR_MAX_LOAD
+
     if utilization < 0.5:
         t = utilization / 0.5
         r = int(COLOR_ZERO_LOAD[0] + (COLOR_MID_LOAD[0] - COLOR_ZERO_LOAD[0]) * t)
@@ -63,8 +68,9 @@ def get_stress_color(beam):
     else:
         t = (utilization - 0.5) / 0.5
         r = int(COLOR_MID_LOAD[0] + (COLOR_MAX_LOAD[0] - COLOR_MID_LOAD[0]) * t)
-        g = int(COLOR_MID_LOAD[1] + (COLOR_MAX_LOAD[1] - COLOR_MAX_LOAD[1]) * t)
+        g = int(COLOR_MID_LOAD[1] + (COLOR_MAX_LOAD[1] - COLOR_MID_LOAD[1]) * t)
         b = int(COLOR_MID_LOAD[2] + (COLOR_MAX_LOAD[2] - COLOR_MAX_LOAD[2]) * t)
+        
     return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
 
 def point_to_line_distance(px, py, x1, y1, x2, y2):
@@ -77,6 +83,31 @@ def point_to_line_distance(px, py, x1, y1, x2, y2):
     closest_x = x1 + t * dx
     closest_y = y1 + t * dy
     return math.hypot(px - closest_x, py - closest_y)
+
+def draw_force_vector(surface, cx, cy, fx, fy):
+    mag = math.hypot(fx, fy)
+    if mag < 1e-1:
+        return
+    
+    dx = fx / mag
+    dy = fy / mag
+    
+    arrow_len = max(20, min(65, int(mag / 1000.0) * 1.5 + 20))
+    
+    end_x = cx
+    end_y = cy
+    start_x = cx - dx * arrow_len
+    start_y = cy - dy * arrow_len
+    
+    pygame.draw.line(surface, COLOR_LOAD, (start_x, start_y), (end_x, end_y), 3)
+    
+    wing_len = 8
+    angle = math.atan2(end_y - start_y, end_x - start_x)
+    
+    left_wing = (end_x - wing_len * math.cos(angle + 0.4), end_y - wing_len * math.sin(angle + 0.4))
+    right_wing = (end_x - wing_len * math.cos(angle - 0.4), end_y - wing_len * math.sin(angle - 0.4))
+    
+    pygame.draw.polygon(surface, COLOR_LOAD, [(end_x, end_y), left_wing, right_wing])
 
 is_running = True
 while is_running:
@@ -200,6 +231,17 @@ while is_running:
                     selected_node_idx = clicked_node_idx
                     selected_beam_idx = None
 
+    if selected_node_idx is not None and current_mode == "SELECT":
+        keys = pygame.key.get_pressed()
+        if keys[pygame.K_UP]:
+            truss.nodes[selected_node_idx].load_y -= 1000.0
+        if keys[pygame.K_DOWN]:
+            truss.nodes[selected_node_idx].load_y += 1000.0
+        if keys[pygame.K_LEFT]:
+            truss.nodes[selected_node_idx].load_x -= 1000.0
+        if keys[pygame.K_RIGHT]:
+            truss.nodes[selected_node_idx].load_x += 1000.0
+
     solve_truss(truss)
 
     screen.fill(COLOR_BACKGROUND)
@@ -240,11 +282,7 @@ while is_running:
         pygame.draw.line(screen, beam_color, (start_node.x, start_node.y), (end_node.x, end_node.y), 4)
 
     for i, node in enumerate(truss.nodes):
-        if node.load_y > 0:
-            arrow_start = (node.x, node.y - 25)
-            arrow_end = (node.x, node.y - NODE_RADIUS)
-            pygame.draw.line(screen, COLOR_LOAD, arrow_start, arrow_end, 3)
-            pygame.draw.polygon(screen, COLOR_LOAD, [arrow_end, (node.x - 5, node.y - NODE_RADIUS - 8), (node.x + 5, node.y - NODE_RADIUS - 8)])
+        draw_force_vector(screen, node.x, node.y, node.load_x, node.load_y)
 
         if i == selected_node_idx or i == active_node_bnd:
             pygame.draw.circle(screen, COLOR_HIGHLIGHT, (node.x, node.y), NODE_RADIUS + 5, width=2)
@@ -299,12 +337,11 @@ while is_running:
             elif node.is_anchor_y and not node.is_anchor_x:
                 support_str = "Roller Support"
                 
-            load_k_n = node.load_y / 1000.0
-            
             lines = [
                 f"Type: {support_str}",
                 f"Coords: ({int(node.x)}, {int(node.y)})",
-                f"Force Vector: {load_k_n:.1f} kN"
+                f"Load X: {node.load_x / 1000.0:.1f} kN",
+                f"Load Y: {node.load_y / 1000.0:.1f} kN"
             ]
 
         hud_w = 240
@@ -336,7 +373,7 @@ while is_running:
 
     active_lbl = font_body.render(f"ACTIVE MATERIAL: {MATERIAL_SPECS[truss.active_material]['label']}", True, COLOR_TEXT_MAIN)
     grid_lbl = font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G]", True, COLOR_TEXT_MUTED)
-    control_lbl = font_body.render("Keys: [1] Steel [2] Aluminum [3] Titanium | [R] Clear All", True, COLOR_TEXT_MUTED)
+    control_lbl = font_body.render("Keys: [1] Steel [2] Aluminum [3] Titanium | [R] Clear All | Node Force: Hold [Arrows]", True, COLOR_TEXT_MUTED)
     screen.blit(active_lbl, (165, WINDOW_HEIGHT - 75))
     screen.blit(grid_lbl, (165, WINDOW_HEIGHT - 55))
     screen.blit(control_lbl, (165, WINDOW_HEIGHT - 35))
