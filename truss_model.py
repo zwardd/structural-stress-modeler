@@ -10,7 +10,6 @@ class Node:
         self.load_y = 0.0
 
     def toggle_support(self):
-        """Cycles through boundary constraints: Free -> Pin (Fixed) -> Roller -> Free"""
         if not self.is_anchor_x and not self.is_anchor_y:
             self.is_anchor_x = True
             self.is_anchor_y = True
@@ -22,21 +21,37 @@ class Node:
             self.is_anchor_y = False
 
 class Beam:
-    def __init__(self, node_a_index, node_b_index):
+    def __init__(self, node_a_index, node_b_index, material_name="Steel"):
         self.node_a = node_a_index
         self.node_b = node_b_index
+        self.material = material_name
+        self.area = 2.5e-3          
         
-        self.area = 2.5e-3          # Cross-sectional area (meters squared)
-        self.modulus = 200e9        # Young's Modulus (Pascals)
-        self.stress = 0.0           # Internal stress running through beam (Pascals)
-        self.force = 0.0            # Total internal axial load (Newtons)
+        if material_name == "Aluminum":
+            self.modulus = 70e9
+        elif material_name == "Titanium":
+            self.modulus = 114e9
+        else:
+            self.modulus = 200e9
+            
+        self.stress = 0.0           
+        self.force = 0.0            
 
 class TrussSystem:
     def __init__(self):
         self.nodes = []
         self.beams = []
+        self.active_material = "Steel"
 
-    def add_node(self, x, y):
+    def set_material(self, material_name):
+        if material_name in ["Steel", "Aluminum", "Titanium"]:
+            self.active_material = material_name
+
+    def add_node(self, x, y, snap_enabled=False, grid_size=20):
+        if snap_enabled:
+            x = round((x - 160) / grid_size) * grid_size + 160
+            y = round((y - 20) / grid_size) * grid_size + 20
+
         for node in self.nodes:
             if math.hypot(node.x - x, node.y - y) < 10:
                 return None
@@ -51,7 +66,7 @@ class TrussSystem:
             if (beam.node_a == index_a and beam.node_b == index_b) or \
                (beam.node_a == index_b and beam.node_b == index_a):
                 return None
-        new_beam = Beam(index_a, index_b)
+        new_beam = Beam(index_a, index_b, self.active_material)
         self.beams.append(new_beam)
         return len(self.beams) - 1
 
@@ -61,6 +76,5 @@ class TrussSystem:
         return math.hypot(node_b.x - node_a.x, node_b.y - node_a.y)
 
     def clear(self):
-        """Purges all structural entities from the tracking arrays to reset the canvas."""
         self.nodes = []
         self.beams = []
