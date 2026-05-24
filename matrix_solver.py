@@ -7,6 +7,8 @@ def solve_truss(truss):
         for beam in truss.beams:
             beam.force = 0.0
             beam.stress = 0.0
+        truss.displacements = None
+        truss.is_stable = True  # Empty/trivial canvas isn't broken
         return
 
     matrix_dim = num_nodes * 2
@@ -64,7 +66,15 @@ def solve_truss(truss):
 
     try:
         displacements = np.linalg.solve(K_global, F_global)
+        truss.displacements = displacements
+        truss.is_stable = True
     except np.linalg.LinAlgError:
+        # Structure is non-rigid or floating. Flush internal forces to 0.
+        truss.displacements = None
+        truss.is_stable = False
+        for beam in truss.beams:
+            beam.force = 0.0
+            beam.stress = 0.0
         return
 
     for beam in truss.beams:

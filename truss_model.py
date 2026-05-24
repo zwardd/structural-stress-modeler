@@ -26,6 +26,7 @@ class Beam:
         self.node_b = node_b_index
         self.material = material_name
         self.area = 2.5e-3          
+        self.inertia = 2.1e-6       
         
         if material_name == "Aluminum":
             self.modulus = 70e9
@@ -42,6 +43,8 @@ class TrussSystem:
         self.nodes = []
         self.beams = []
         self.active_material = "Steel"
+        self.displacements = None
+        self.is_stable = True
 
     def set_material(self, material_name):
         if material_name in ["Steel", "Aluminum", "Titanium"]:
@@ -78,3 +81,5 @@ class TrussSystem:
     def clear(self):
         self.nodes = []
         self.beams = []
+        self.displacements = None
+        self.is_stable = True
