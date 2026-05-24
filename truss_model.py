@@ -10,27 +10,26 @@ class Node:
         self.load_y = 0.0
 
     def toggle_support(self):
+        """Cycles through boundary constraints: Free -> Pin (Fixed) -> Roller -> Free"""
         if not self.is_anchor_x and not self.is_anchor_y:
-            # Switch to Pin Support (Fixed X and Y)
             self.is_anchor_x = True
             self.is_anchor_y = True
         elif self.is_anchor_x and self.is_anchor_y:
-            # Switch to Roller Support (Fixed Y only)
             self.is_anchor_x = False
             self.is_anchor_y = True
         else:
-            # Reset to free node
             self.is_anchor_x = False
             self.is_anchor_y = False
 
 class Beam:
-    def __init__(self, node_a_idx, node_b_idx):
-        self.node_a = node_a_idx
-        self.node_b = node_b_idx
-        self.area = 0.002        
-        self.modulus = 200e9     
-        self.force = 0.0         
-        self.stress = 0.0        
+    def __init__(self, node_a_index, node_b_index):
+        self.node_a = node_a_index
+        self.node_b = node_b_index
+        
+        self.area = 2.5e-3          # Cross-sectional area (meters squared)
+        self.modulus = 200e9        # Young's Modulus (Pascals)
+        self.stress = 0.0           # Internal stress running through beam (Pascals)
+        self.force = 0.0            # Total internal axial load (Newtons)
 
 class TrussSystem:
     def __init__(self):
@@ -38,18 +37,30 @@ class TrussSystem:
         self.beams = []
 
     def add_node(self, x, y):
-        self.nodes.append(Node(x, y))
+        for node in self.nodes:
+            if math.hypot(node.x - x, node.y - y) < 10:
+                return None
+        new_node = Node(x, y)
+        self.nodes.append(new_node)
+        return len(self.nodes) - 1
 
-    def add_beam(self, a_idx, b_idx):
-        if a_idx != b_idx:
-            for beam in self.beams:
-                if {beam.node_a, beam.node_b} == {a_idx, b_idx}:
-                    return False
-            self.beams.append(Beam(a_idx, b_idx))
-            return True
-        return False
+    def add_beam(self, index_a, index_b):
+        if index_a == index_b:
+            return None
+        for beam in self.beams:
+            if (beam.node_a == index_a and beam.node_b == index_b) or \
+               (beam.node_a == index_b and beam.node_b == index_a):
+                return None
+        new_beam = Beam(index_a, index_b)
+        self.beams.append(new_beam)
+        return len(self.beams) - 1
 
     def get_beam_length(self, beam):
-        na = self.nodes[beam.node_a]
-        nb = self.nodes[beam.node_b]
-        return math.hypot(nb.x - na.x, nb.y - na.y)
+        node_a = self.nodes[beam.node_a]
+        node_b = self.nodes[beam.node_b]
+        return math.hypot(node_b.x - node_a.x, node_b.y - node_a.y)
+
+    def clear(self):
+        """Purges all structural entities from the tracking arrays to reset the canvas."""
+        self.nodes = []
+        self.beams = []
