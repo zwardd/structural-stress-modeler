@@ -25,7 +25,6 @@ COLOR_LOAD       = (239, 68, 68)
 COLOR_REACTION   = (168, 85, 247)
 COLOR_HIGHLIGHT  = (255, 255, 255)  
 COLOR_PLAY_GREEN = (34, 197, 94)
-
 COLOR_ZERO_LOAD = (144, 238, 144)   
 COLOR_MID_LOAD  = (234, 179, 8)     
 COLOR_MAX_LOAD  = (239, 68, 68)     
@@ -43,12 +42,18 @@ selected_beam_idx = None
 current_mode = "SELECT" 
 is_playing = False       
 grid_enabled = True
-show_deformed = False
-gravity_multiplier = 1.0
+show_deformed = True
+gravity_multiplier = 0.0
+current_def_scale = 0.0
+last_gravity_multiplier = 0.0
+first_break_gravity = None
+
+fading_beams = []  
+
 GRID_SIZE = 20
 CLICK_TOLERANCE = 12
 NODE_RADIUS = 6
-DEF_SCALE = 500.0
+TARGET_DEF_SCALE = 2200.0
 
 MATERIAL_SPECS = {
     "Steel": {"yield": 250e6, "density": 7850, "label": "Structural Steel"},
@@ -57,7 +62,7 @@ MATERIAL_SPECS = {
 }
 
 def calculate_utilization(beam):
-    if beam.force == 0.0:
+    if beam.is_broken or beam.force == 0.0:
         return 0.0
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
@@ -114,8 +119,8 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
 def get_def_pos(idx, node):
     if truss.displacements is None or not show_deformed or not truss.is_stable:
         return node.x, node.y
-    dx = truss.displacements[idx * 2] * DEF_SCALE
-    dy = -truss.displacements[idx * 2 + 1] * DEF_SCALE
+    dx = truss.displacements[idx * 2] * current_def_scale
+    dy = -truss.displacements[idx * 2 + 1] * current_def_scale
     return node.x + dx, node.y + dy
 
 is_running = True
@@ -133,14 +138,24 @@ while is_running:
         elif event.type == pygame.KEYDOWN:
             if event.key == pygame.K_SPACE:
                 is_playing = not is_playing
-                gravity_multiplier = 1.0
                 active_node_bnd = None
+            if event.key == pygame.K_EQUALS:
+                if first_break_gravity is not None:
+                    gravity_multiplier = min(first_break_gravity, gravity_multiplier + 0.5)
+                else:
+                    gravity_multiplier = min(100.0, gravity_multiplier + 0.5)
+            elif event.key == pygame.K_MINUS:
+                gravity_multiplier = max(0.0, gravity_multiplier - 0.5)
+                
             if not is_playing:
                 if event.key == pygame.K_r:
                     truss.clear()
                     active_node_bnd = None
                     selected_node_idx = None
                     selected_beam_idx = None
+                    gravity_multiplier = 0.0
+                    first_break_gravity = None
+                    fading_beams = []
                 elif event.key == pygame.K_g:
                     grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d:
@@ -151,10 +166,23 @@ while is_running:
                     truss.set_material("Aluminum")
                 elif event.key == pygame.K_3:
                     truss.set_material("Titanium")
+                elif event.key == pygame.K_LEFTBRACKET and selected_beam_idx is not None:
+                    truss.beams[selected_beam_idx].adjust_area(-5.0e-4)
+                elif event.key == pygame.K_RIGHTBRACKET and selected_beam_idx is not None:
+                    truss.beams[selected_beam_idx].adjust_area(5.0e-4)
+                elif event.key == pygame.K_m and selected_beam_idx is not None:
+                    b = truss.beams[selected_beam_idx]
+                    m_list = ["Steel", "Aluminum", "Titanium"]
+                    next_m = m_list[(m_list.index(b.material) + 1) % 3]
+                    b.update_material_properties(next_m)
+                    b.is_broken = False
+                    b.broken_at_gravity = None
+                    first_break_gravity = None
                 elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
                     if selected_beam_idx is not None:
                         truss.beams.pop(selected_beam_idx)
                         selected_beam_idx = None
+                        first_break_gravity = None
                     elif selected_node_idx is not None:
                         idx = selected_node_idx
                         truss.beams = [b for b in truss.beams if b.node_a != idx and b.node_b != idx]
@@ -163,13 +191,13 @@ while is_running:
                             if b.node_b > idx: b.node_b -= 1
                         truss.nodes.pop(idx)
                         selected_node_idx = None
+                        first_break_gravity = None
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             mouse_pos = event.pos
             if sidebar_rect.collidepoint(mouse_pos):
                 if btn_play.collidepoint(mouse_pos):
                     is_playing = not is_playing
-                    gravity_multiplier = 1.0
                 elif btn_select.collidepoint(mouse_pos) and not is_playing:
                     current_mode = "SELECT"
                 elif btn_node.collidepoint(mouse_pos) and not is_playing:
@@ -191,28 +219,35 @@ while is_running:
                 if keys[pygame.K_l] and clicked_node_idx is not None:
                     truss.nodes[clicked_node_idx].load_y += 10000.0
                     active_node_bnd = None
+                    first_break_gravity = None
                 else:
                     if current_mode == "SELECT":
                         selected_node_idx = clicked_node_idx
                         selected_beam_idx = None
                         if clicked_node_idx is None:
                             for i, b in enumerate(truss.beams):
+                                if hasattr(b, 'is_broken') and b.is_broken: continue
                                 if point_to_line_distance(mouse_pos[0], mouse_pos[1], truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < 8:
                                     selected_beam_idx = i
                     elif current_mode == "NODE" and clicked_node_idx is None:
                         truss.add_node(mouse_pos[0], mouse_pos[1], snap_enabled=grid_enabled, grid_size=GRID_SIZE)
+                        first_break_gravity = None
                     elif current_mode == "BEAM":
                         if clicked_node_idx is not None:
                             if active_node_bnd is None: active_node_bnd = clicked_node_idx
                             else:
                                 truss.add_beam(active_node_bnd, clicked_node_idx)
                                 active_node_bnd = None
+                                first_break_gravity = None
                         else: active_node_bnd = None
             elif event.button == 3 and clicked_node_idx is not None:
                 truss.nodes[clicked_node_idx].toggle_support()
+                first_break_gravity = None
 
     if selected_node_idx is not None and current_mode == "SELECT" and not is_playing:
         keys = pygame.key.get_pressed()
+        if keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
+            first_break_gravity = None
         if keys[pygame.K_UP]:
             truss.nodes[selected_node_idx].load_y -= 1000.0
         if keys[pygame.K_DOWN]:
@@ -223,17 +258,63 @@ while is_running:
             truss.nodes[selected_node_idx].load_x += 1000.0
 
     if is_playing:
-        gravity_multiplier += 0.05
-        for node in truss.nodes:
-            node.load_y += 500.0 * gravity_multiplier
-        solve_truss(truss)
-        for node in truss.nodes:
-            node.load_y -= 500.0 * gravity_multiplier
+        current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
+        
+        if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
+            gravity_multiplier = first_break_gravity
+
         for b in truss.beams:
-            if calculate_utilization(b) > 1.0:
-                truss.beams.remove(b)
-    else:
+            if not hasattr(b, 'is_broken'): b.is_broken = False
+            if not hasattr(b, 'broken_at_gravity'): b.broken_at_gravity = None
+            
+            if b.is_broken and b.broken_at_gravity is not None:
+                if gravity_multiplier < b.broken_at_gravity:
+                    b.is_broken = False
+                    b.broken_at_gravity = None
+        
+        if not any(getattr(b, 'is_broken', False) for b in truss.beams):
+            first_break_gravity = None
+
+        for node in truss.nodes:
+            node.load_y += 1000.0 * gravity_multiplier
         solve_truss(truss)
+        for node in truss.nodes:
+            node.load_y -= 1000.0 * gravity_multiplier
+
+        if truss.is_stable:
+            for b in truss.beams:
+                if not b.is_broken and calculate_utilization(b) >= 1.0:
+                    b.is_broken = True
+                    b.broken_at_gravity = gravity_multiplier
+                    
+                    if first_break_gravity is None:
+                        first_break_gravity = gravity_multiplier
+                    
+                    ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
+                    bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
+                    mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                    thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
+                    
+                    fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
+                    fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
+                    break 
+    else:
+        current_def_scale += (0.0 - current_def_scale) * 0.15
+        first_break_gravity = None
+        for b in truss.beams:
+            b.is_broken = False
+            b.broken_at_gravity = None
+        solve_truss(truss)
+
+    last_gravity_multiplier = gravity_multiplier
+
+    for fb in fading_beams[:]:
+        fb[5] -= 0.04  
+        fb[6] += 0.45  
+        fb[1] += fb[6]
+        fb[3] += fb[6]
+        if fb[5] <= 0:
+            fading_beams.remove(fb)
 
     screen.fill(COLOR_BACKGROUND)
     pygame.draw.rect(screen, COLOR_PANEL_BG, sidebar_rect)
@@ -249,12 +330,15 @@ while is_running:
     total_mass = 0.0
     max_util = 0.0
     for b in truss.beams:
+        if hasattr(b, 'is_broken') and b.is_broken: continue
         specs = MATERIAL_SPECS.get(b.material, MATERIAL_SPECS["Steel"])
         length_m = truss.get_beam_length(b) / 20.0
         total_mass += length_m * b.area * specs["density"]
         max_util = max(max_util, calculate_utilization(b))
         
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
+    if selected_beam_idx is not None and hasattr(truss.beams[selected_beam_idx], 'is_broken') and truss.beams[selected_beam_idx].is_broken:
+        selected_beam_idx = None
     
     screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 310))
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
@@ -262,7 +346,7 @@ while is_running:
     
     if not truss.is_stable:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
-    elif max_util >= 1.0:
+    elif max_util >= 1.0 or not math.isfinite(fos_val):
         fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
     elif fos_val == float('inf'):
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
@@ -281,19 +365,40 @@ while is_running:
         for y in range(sim_rect.top, sim_rect.bottom, GRID_SIZE): pygame.draw.line(screen, COLOR_GRID, (sim_rect.left, y), (sim_rect.right, y))
     pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
 
+    node_has_connections = [False] * len(truss.nodes)
+    for beam in truss.beams:
+        if hasattr(beam, 'is_broken') and not beam.is_broken:
+            node_has_connections[beam.node_a] = True
+            node_has_connections[beam.node_b] = True
+
     for i, beam in enumerate(truss.beams):
+        if hasattr(beam, 'is_broken') and beam.is_broken: continue
         ax, ay = get_def_pos(beam.node_a, truss.nodes[beam.node_a])
         bx, by = get_def_pos(beam.node_b, truss.nodes[beam.node_b])
-        if show_deformed and truss.displacements is not None and truss.is_stable:
+        if show_deformed and truss.displacements is not None and truss.is_stable and is_playing:
             pygame.draw.line(screen, (45, 45, 50), (truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y), (truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y), 1)
+        
+        thickness_pixels = int((beam.area / 2.5e-3) * 4.0)
+        thickness_pixels = max(2, min(14, thickness_pixels))
+        
         if i == selected_beam_idx:
-            pygame.draw.line(screen, COLOR_HIGHLIGHT, (ax, ay), (bx, by), 8)
-        pygame.draw.line(screen, get_stress_color(beam), (ax, ay), (bx, by), 4)
+            pygame.draw.line(screen, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness_pixels + 4)
+        pygame.draw.line(screen, get_stress_color(beam), (ax, ay), (bx, by), thickness_pixels)
+
+    for fb in fading_beams:
+        alpha = int(fb[5] * 255)
+        if alpha <= 0: continue
+        surf = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
+        pygame.draw.line(surf, (220, 38, 38, alpha), (fb[0], fb[1]), (fb[2], fb[3]), fb[4])
+        screen.blit(surf, (0,0))
 
     for i, node in enumerate(truss.nodes):
+        if is_playing and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y:
+            continue
+            
         nx, ny = get_def_pos(i, node)
         draw_force_vector(screen, nx, ny, node.load_x, node.load_y, COLOR_LOAD)
-        if node.rx != 0.0 or node.ry != 0.0:
+        if is_playing and (node.rx != 0.0 or node.ry != 0.0):
             draw_force_vector(screen, nx, ny, node.rx, node.ry, COLOR_REACTION)
         if i == selected_node_idx or i == active_node_bnd:
             pygame.draw.circle(screen, COLOR_HIGHLIGHT, (nx, ny), NODE_RADIUS + 5, width=2)
@@ -326,10 +431,10 @@ while is_running:
             force_k_n = beam.force / 1000.0               
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
             utilization_pct = calculate_utilization(beam) * 100.0
-            lines = [f"Alloy: {beam.material}", f"Length: {length_m:.2f} m", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa", f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"]
+            lines = [f"Alloy: {beam.material} [M]", f"Area: {beam.area * 1e4:.1f} cm² [ [ ] / [ ] ]", f"Length: {length_m:.2f} m", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa", f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"]
             if nature == "COMPRESSION" and length_m > 0:
                 p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
-                lines.insert(3, f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
+                lines.insert(4, f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
         elif selected_node_idx is not None:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
@@ -359,9 +464,12 @@ while is_running:
             local_y += 24
         screen.blit(hud_surface, (hud_x, sim_rect.top + 15))
 
-    screen.blit(font_body.render(f"ACTIVE MATERIAL: {MATERIAL_SPECS[truss.active_material]['label']}", True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
+    grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"
+    if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity):
+        grav_msg += " (CRITICAL POINT LOCKED)"
+    screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
     screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-    screen.blit(font_body.render("Keys: [1] Steel [2] Aluminum [3] Titanium | [R] Clear All | [SPACE] Play/Pause Simulation | Arrow Keys adjust select loads", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+    screen.blit(font_body.render("Keys: [1-3] Material | [R] Reset | [SPACE] Play/Pause | Arrow Keys adjust loads | [ / ] element area | [M] cycle alloy", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
     clock.tick(60)

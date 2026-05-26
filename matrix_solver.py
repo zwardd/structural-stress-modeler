@@ -23,6 +23,9 @@ def solve_truss(truss):
         F_global[i * 2 + 1] = -node.load_y
 
     for beam in truss.beams:
+        if hasattr(beam, 'is_broken') and beam.is_broken:
+            continue  # Completely bypass compiling broken elements
+            
         idx_a = beam.node_a
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]
@@ -84,6 +87,11 @@ def solve_truss(truss):
             node.ry = -reactions[i * 2 + 1]
 
     for beam in truss.beams:
+        if hasattr(beam, 'is_broken') and beam.is_broken:
+            beam.force = 0.0
+            beam.stress = 0.0
+            continue
+            
         idx_a = beam.node_a
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]

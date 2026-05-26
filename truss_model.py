@@ -29,14 +29,24 @@ class Beam:
         self.material = material_name
         self.area = 2.5e-3          
         self.inertia = 2.1e-6       
+        self.update_material_properties(material_name)
+        self.stress = 0.0           
+        self.force = 0.0            
+        self.is_broken = False
+
+    def update_material_properties(self, material_name):
+        self.material = material_name
         if material_name == "Aluminum":
             self.modulus = 70e9
         elif material_name == "Titanium":
             self.modulus = 114e9
         else:
             self.modulus = 200e9
-        self.stress = 0.0           
-        self.force = 0.0            
+
+    def adjust_area(self, delta):
+        self.area = max(5.0e-4, min(1.0e-2, self.area + delta))
+        self.inertia = 0.336 * (self.area ** 2)
+        self.is_broken = False
 
 class TrussSystem:
     def __init__(self):
