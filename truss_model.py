@@ -8,6 +8,8 @@ class Node:
         self.is_anchor_y = False
         self.load_x = 0.0
         self.load_y = 0.0
+        self.rx = 0.0
+        self.ry = 0.0
 
     def toggle_support(self):
         if not self.is_anchor_x and not self.is_anchor_y:
@@ -27,14 +29,12 @@ class Beam:
         self.material = material_name
         self.area = 2.5e-3          
         self.inertia = 2.1e-6       
-        
         if material_name == "Aluminum":
             self.modulus = 70e9
         elif material_name == "Titanium":
             self.modulus = 114e9
         else:
             self.modulus = 200e9
-            
         self.stress = 0.0           
         self.force = 0.0            
 
@@ -54,7 +54,6 @@ class TrussSystem:
         if snap_enabled:
             x = round((x - 160) / grid_size) * grid_size + 160
             y = round((y - 20) / grid_size) * grid_size + 20
-
         for node in self.nodes:
             if math.hypot(node.x - x, node.y - y) < 10:
                 return None
