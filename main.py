@@ -25,6 +25,7 @@ COLOR_LOAD       = (239, 68, 68)
 COLOR_REACTION   = (168, 85, 247)
 COLOR_HIGHLIGHT  = (255, 255, 255)  
 COLOR_PLAY_GREEN = (34, 197, 94)
+
 COLOR_ZERO_LOAD = (144, 238, 144)   
 COLOR_MID_LOAD  = (234, 179, 8)     
 COLOR_MAX_LOAD  = (239, 68, 68)     
@@ -46,7 +47,11 @@ show_deformed = True
 gravity_multiplier = 0.0
 current_def_scale = 0.0
 last_gravity_multiplier = 0.0
-first_break_gravity = None
+first_break_gravity = None  
+
+input_buffer = ""
+input_active = False
+input_type = "Y"
 
 fading_beams = []  
 
@@ -127,18 +132,40 @@ is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
     sim_rect = pygame.Rect(160, 20, 960, 660)
-    btn_select = pygame.Rect(15, 80, 110, 40)
-    btn_node   = pygame.Rect(15, 135, 110, 40)
-    btn_beam   = pygame.Rect(15, 190, 110, 40)
-    btn_play   = pygame.Rect(15, 385, 110, 40)
+    btn_select = pygame.Rect(15, 80, 110, 35)
+    btn_node   = pygame.Rect(15, 125, 110, 35)
+    btn_beam   = pygame.Rect(15, 170, 110, 35)
+    btn_load   = pygame.Rect(15, 215, 110, 35)
+    btn_play   = pygame.Rect(15, 410, 110, 40)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             is_running = False
         elif event.type == pygame.KEYDOWN:
+            if input_active:
+                if event.key == pygame.K_RETURN:
+                    try:
+                        val = float(input_buffer) * 1000.0
+                        if selected_node_idx is not None:
+                            if input_type == "X":
+                                truss.nodes[selected_node_idx].load_x = val
+                            else:
+                                truss.nodes[selected_node_idx].load_y = val
+                        first_break_gravity = None
+                    except ValueError:
+                        pass
+                    input_active = False
+                    input_buffer = ""
+                elif event.key == pygame.K_BACKSPACE:
+                    input_buffer = input_buffer[:-1]
+                elif event.unicode in "0123456789.-":
+                    input_buffer += event.unicode
+                continue
+
             if event.key == pygame.K_SPACE:
                 is_playing = not is_playing
                 active_node_bnd = None
+                input_active = False
             if event.key == pygame.K_EQUALS:
                 if first_break_gravity is not None:
                     gravity_multiplier = min(first_break_gravity, gravity_multiplier + 0.5)
@@ -156,6 +183,7 @@ while is_running:
                     gravity_multiplier = 0.0
                     first_break_gravity = None
                     fading_beams = []
+                    input_active = False
                 elif event.key == pygame.K_g:
                     grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d:
@@ -198,13 +226,24 @@ while is_running:
             if sidebar_rect.collidepoint(mouse_pos):
                 if btn_play.collidepoint(mouse_pos):
                     is_playing = not is_playing
+                    input_active = False
                 elif btn_select.collidepoint(mouse_pos) and not is_playing:
                     current_mode = "SELECT"
+                    input_active = False
                 elif btn_node.collidepoint(mouse_pos) and not is_playing:
                     current_mode = "NODE"
+                    input_active = False
                 elif btn_beam.collidepoint(mouse_pos) and not is_playing:
                     current_mode = "BEAM"
+                    input_active = False
+                elif btn_load.collidepoint(mouse_pos) and not is_playing:
+                    current_mode = "LOAD"
+                    input_active = False
                 continue
+
+            if input_active:
+                input_active = False
+                input_buffer = ""
 
             if not sim_rect.collidepoint(mouse_pos) or is_playing: continue
 
@@ -215,36 +254,34 @@ while is_running:
                     break
 
             if event.button == 1:
-                keys = pygame.key.get_pressed()
-                if keys[pygame.K_l] and clicked_node_idx is not None:
-                    truss.nodes[clicked_node_idx].load_y += 10000.0
-                    active_node_bnd = None
-                    first_break_gravity = None
-                else:
-                    if current_mode == "SELECT":
+                if current_mode == "LOAD":
+                    if clicked_node_idx is not None:
                         selected_node_idx = clicked_node_idx
                         selected_beam_idx = None
-                        if clicked_node_idx is None:
-                            for i, b in enumerate(truss.beams):
-                                if hasattr(b, 'is_broken') and b.is_broken: continue
-                                if point_to_line_distance(mouse_pos[0], mouse_pos[1], truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < 8:
-                                    selected_beam_idx = i
-                    elif current_mode == "NODE" and clicked_node_idx is None:
-                        truss.add_node(mouse_pos[0], mouse_pos[1], snap_enabled=grid_enabled, grid_size=GRID_SIZE)
-                        first_break_gravity = None
-                    elif current_mode == "BEAM":
-                        if clicked_node_idx is not None:
-                            if active_node_bnd is None: active_node_bnd = clicked_node_idx
-                            else:
-                                truss.add_beam(active_node_bnd, clicked_node_idx)
-                                active_node_bnd = None
-                                first_break_gravity = None
-                        else: active_node_bnd = None
+                elif current_mode == "SELECT":
+                    selected_node_idx = clicked_node_idx
+                    selected_beam_idx = None
+                    if clicked_node_idx is None:
+                        for i, b in enumerate(truss.beams):
+                            if hasattr(b, 'is_broken') and b.is_broken: continue
+                            if point_to_line_distance(mouse_pos[0], mouse_pos[1], truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < 8:
+                                selected_beam_idx = i
+                elif current_mode == "NODE" and clicked_node_idx is None:
+                    truss.add_node(mouse_pos[0], mouse_pos[1], snap_enabled=grid_enabled, grid_size=GRID_SIZE)
+                    first_break_gravity = None
+                elif current_mode == "BEAM":
+                    if clicked_node_idx is not None:
+                        if active_node_bnd is None: active_node_bnd = clicked_node_idx
+                        else:
+                            truss.add_beam(active_node_bnd, clicked_node_idx)
+                            active_node_bnd = None
+                            first_break_gravity = None
+                    else: active_node_bnd = None
             elif event.button == 3 and clicked_node_idx is not None:
                 truss.nodes[clicked_node_idx].toggle_support()
                 first_break_gravity = None
 
-    if selected_node_idx is not None and current_mode == "SELECT" and not is_playing:
+    if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not input_active:
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
             first_break_gravity = None
@@ -259,14 +296,12 @@ while is_running:
 
     if is_playing:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
-        
         if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
             gravity_multiplier = first_break_gravity
 
         for b in truss.beams:
             if not hasattr(b, 'is_broken'): b.is_broken = False
             if not hasattr(b, 'broken_at_gravity'): b.broken_at_gravity = None
-            
             if b.is_broken and b.broken_at_gravity is not None:
                 if gravity_multiplier < b.broken_at_gravity:
                     b.is_broken = False
@@ -286,7 +321,6 @@ while is_running:
                 if not b.is_broken and calculate_utilization(b) >= 1.0:
                     b.is_broken = True
                     b.broken_at_gravity = gravity_multiplier
-                    
                     if first_break_gravity is None:
                         first_break_gravity = gravity_multiplier
                     
@@ -320,12 +354,13 @@ while is_running:
     pygame.draw.rect(screen, COLOR_PANEL_BG, sidebar_rect)
     pygame.draw.line(screen, COLOR_UI_BORDER, (140, 0), (140, 700), 2)
     
-    for btn, label, mode in [(btn_select, "1. Select", "SELECT"), (btn_node, "2. + Node", "NODE"), (btn_beam, "3. + Beam", "BEAM")]:
+    modes_list = [(btn_select, "1. Select", "SELECT"), (btn_node, "2. + Node", "NODE"), (btn_beam, "3. + Beam", "BEAM"), (btn_load, "4. + Load", "LOAD")]
+    for btn, label, mode in modes_list:
         pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_playing else COLOR_BACKGROUND, btn, border_radius=4)
-        screen.blit(font_body.render(label, True, COLOR_TEXT_MAIN), (btn.x + 12, btn.y + 12))
+        screen.blit(font_body.render(label, True, COLOR_TEXT_MAIN), (btn.x + 12, btn.y + 10))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 260), (130, 260), 1)
-    screen.blit(font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 280))
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 275), (130, 275), 1)
+    screen.blit(font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 295))
     
     total_mass = 0.0
     max_util = 0.0
@@ -340,9 +375,9 @@ while is_running:
     if selected_beam_idx is not None and hasattr(truss.beams[selected_beam_idx], 'is_broken') and truss.beams[selected_beam_idx].is_broken:
         selected_beam_idx = None
     
-    screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 310))
+    screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 325))
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(fos_label, (15, 335))
+    screen.blit(fos_label, (15, 350))
     
     if not truss.is_stable:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
@@ -352,9 +387,9 @@ while is_running:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
         fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 333))
+    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 348))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 365), (130, 365), 1)
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 390), (130, 390), 1)
     pygame.draw.rect(screen, (30, 50, 35) if is_playing else COLOR_BACKGROUND, btn_play, border_radius=4)
     pygame.draw.rect(screen, COLOR_PLAY_GREEN if is_playing else COLOR_UI_BORDER, btn_play, width=1, border_radius=4)
     screen.blit(font_header.render("|| Pause" if is_playing else "> Play", True, COLOR_PLAY_GREEN if is_playing else COLOR_TEXT_MAIN), (btn_play.x + 20, btn_play.y + 10))
@@ -397,9 +432,15 @@ while is_running:
             continue
             
         nx, ny = get_def_pos(i, node)
-        draw_force_vector(screen, nx, ny, node.load_x, node.load_y, COLOR_LOAD)
+        
+        sim_load_y = node.load_y
+        if is_playing:
+            sim_load_y += 1000.0 * gravity_multiplier
+            
+        draw_force_vector(screen, nx, ny, node.load_x, sim_load_y, COLOR_LOAD)
         if is_playing and (node.rx != 0.0 or node.ry != 0.0):
             draw_force_vector(screen, nx, ny, node.rx, node.ry, COLOR_REACTION)
+        
         if i == selected_node_idx or i == active_node_bnd:
             pygame.draw.circle(screen, COLOR_HIGHLIGHT, (nx, ny), NODE_RADIUS + 5, width=2)
         if node.is_anchor_x and node.is_anchor_y:
@@ -439,13 +480,32 @@ while is_running:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
             support_str = "Pin Support" if node.is_anchor_x and node.is_anchor_y else ("Roller Support" if node.is_anchor_y else "Free Joint")
-            lines = [f"Type: {support_str}", f"Coords: ({int(node.x)}, {int(node.y)})", f"Load X: {node.load_x / 1000.0:.1f} kN", f"Load Y: {node.load_y / 1000.0:.1f} kN"]
+            
+            effective_y = node.load_y
+            if is_playing:
+                effective_y += 1000.0 * gravity_multiplier
+                
+            net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
+            
+            lines = [
+                f"Type: {support_str}", 
+                f"Coords: ({int(node.x)}, {int(node.y)})", 
+                f"Net Load: {net_magnitude:.1f} kN",
+                f"Load X: {node.load_x / 1000.0:.1f} kN", 
+                f"Load Y: {effective_y / 1000.0:.1f} kN"
+            ]
             if node.is_anchor_x or node.is_anchor_y:
+                net_react = math.hypot(node.rx, node.ry) / 1000.0
+                lines.append(f"Net React: {net_react:.1f} kN")
                 lines.append(f"React X: {node.rx / 1000.0:.1f} kN")
                 lines.append(f"React Y: {node.ry / 1000.0:.1f} kN")
 
         hud_w = max(240, max([font_body.size(line)[0] for line in lines]) + 40) if lines else 240
         hud_h = 45 + (len(lines) * 24)
+        
+        if current_mode == "LOAD" and selected_node_idx is not None:
+            hud_h += 75
+            
         hud_x = sim_rect.right - hud_w - 15
         hud_surface = pygame.Surface((hud_w, hud_h), pygame.SRCALPHA)
         pygame.draw.rect(hud_surface, (18, 18, 20, 220), (0, 0, hud_w, hud_h), border_radius=6)
@@ -462,6 +522,38 @@ while is_running:
             else:
                 hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (15, local_y))
             local_y += 24
+            
+        if current_mode == "LOAD" and selected_node_idx is not None:
+            local_y += 5
+            pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
+            local_y += 10
+            
+            box_x = pygame.Rect(15, local_y, 95, 25)
+            box_y = pygame.Rect(120, local_y, 95, 25)
+            
+            mx, my = pygame.mouse.get_pos()
+            lx, ly = mx - hud_x, my - (sim_rect.top + 15)
+            
+            if pygame.mouse.get_pressed()[0]:
+                if box_x.collidepoint((lx, ly)):
+                    input_active = True
+                    input_type = "X"
+                    input_buffer = ""
+                elif box_y.collidepoint((lx, ly)):
+                    input_active = True
+                    input_type = "Y"
+                    input_buffer = ""
+                    
+            pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "X") else (10, 10, 12), box_x, border_radius=4)
+            pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_x, width=1, border_radius=4)
+            hud_surface.blit(font_body.render("FX: " + (input_buffer if (input_active and input_type == "X") else f"{truss.nodes[selected_node_idx].load_x/1000.0:.1f}") + ("_" if (input_active and input_type == "X") else " kN"), True, COLOR_TEXT_MAIN), (22, local_y + 5))
+            
+            pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "Y") else (10, 10, 12), box_y, border_radius=4)
+            pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_y, width=1, border_radius=4)
+            hud_surface.blit(font_body.render("FY: " + (input_buffer if (input_active and input_type == "Y") else f"{truss.nodes[selected_node_idx].load_y/1000.0:.1f}") + ("_" if (input_active and input_type == "Y") else " kN"), True, COLOR_TEXT_MAIN), (127, local_y + 5))
+            
+            hud_surface.blit(font_body.render("Click box, type value, press Enter", True, COLOR_TEXT_MUTED), (15, local_y + 35))
+
         screen.blit(hud_surface, (hud_x, sim_rect.top + 15))
 
     grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"

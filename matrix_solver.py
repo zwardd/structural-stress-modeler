@@ -6,6 +6,7 @@ def solve_truss(truss):
     for node in truss.nodes:
         node.rx = 0.0
         node.ry = 0.0
+        
     if num_nodes < 2 or len(truss.beams) == 0:
         for beam in truss.beams:
             beam.force = 0.0
@@ -18,13 +19,20 @@ def solve_truss(truss):
     K_global = np.zeros((matrix_dim, matrix_dim))
     F_global = np.zeros(matrix_dim)
 
+    node_has_connections = [False] * num_nodes
+    for beam in truss.beams:
+        if hasattr(beam, 'is_broken') and beam.is_broken:
+            continue
+        node_has_connections[beam.node_a] = True
+        node_has_connections[beam.node_b] = True
+
     for i, node in enumerate(truss.nodes):
         F_global[i * 2] = node.load_x
         F_global[i * 2 + 1] = -node.load_y
 
     for beam in truss.beams:
         if hasattr(beam, 'is_broken') and beam.is_broken:
-            continue  # Completely bypass compiling broken elements
+            continue  
             
         idx_a = beam.node_a
         idx_b = beam.node_b
@@ -54,13 +62,13 @@ def solve_truss(truss):
     F_orig = F_global.copy()
 
     for i, node in enumerate(truss.nodes):
-        if node.is_anchor_x:
+        if node.is_anchor_x or not node_has_connections[i]:
             dof_x = i * 2
             K_global[dof_x, :] = 0
             K_global[:, dof_x] = 0
             K_global[dof_x, dof_x] = 1.0
             F_global[dof_x] = 0
-        if node.is_anchor_y:
+        if node.is_anchor_y or not node_has_connections[i]:
             dof_y = i * 2 + 1
             K_global[dof_y, :] = 0
             K_global[:, dof_y] = 0
