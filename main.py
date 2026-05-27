@@ -2,7 +2,7 @@ import pygame
 import sys
 import math
 from truss_model import TrussSystem
-from matrix_solver import solve_truss
+from matrix_solver import solve_truss, calculate_benchmark_metrics
 
 pygame.init()
 
@@ -48,6 +48,7 @@ gravity_multiplier = 0.0
 current_def_scale = 0.0
 last_gravity_multiplier = 0.0
 first_break_gravity = None  
+show_benchmark_hud = False
 
 input_buffer = ""
 input_active = False
@@ -124,20 +125,20 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
 def get_def_pos(idx, node):
     if truss.displacements is None or not show_deformed or not truss.is_stable:
         return node.x, node.y
-    # Convert real meter structural displacement back to pixel shifts
-    dx = truss.displacements[idx * 2] * current_def_scale * truss.PIXELS_PER_METER
-    dy = -truss.displacements[idx * 2 + 1] * current_def_scale * truss.PIXELS_PER_METER
+    dx = truss.displacements[idx * 2] * current_def_scale
+    dy = -truss.displacements[idx * 2 + 1] * current_def_scale
     return node.x + dx, node.y + dy
 
 is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
     sim_rect = pygame.Rect(160, 20, 960, 660)
-    btn_select = pygame.Rect(15, 80, 110, 35)
-    btn_node   = pygame.Rect(15, 125, 110, 35)
-    btn_beam   = pygame.Rect(15, 170, 110, 35)
-    btn_load   = pygame.Rect(15, 215, 110, 35)
-    btn_play   = pygame.Rect(15, 410, 110, 40)
+    btn_select    = pygame.Rect(15, 80, 110, 35)
+    btn_node      = pygame.Rect(15, 125, 110, 35)
+    btn_beam      = pygame.Rect(15, 170, 110, 35)
+    btn_load      = pygame.Rect(15, 215, 110, 35)
+    btn_benchmark = pygame.Rect(15, 260, 110, 35)
+    btn_play      = pygame.Rect(15, 430, 110, 40)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -185,10 +186,19 @@ while is_running:
                     first_break_gravity = None
                     fading_beams = []
                     input_active = False
+                    show_benchmark_hud = False
                 elif event.key == pygame.K_g:
                     grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d:
                     show_deformed = not show_deformed
+                elif event.key == pygame.K_v:
+                    show_benchmark_hud = not show_benchmark_hud
+                    if show_benchmark_hud:
+                        truss.load_benchmark_case()
+                        selected_node_idx = None
+                        selected_beam_idx = None
+                        active_node_bnd = None
+                        first_break_gravity = None
                 elif event.key == pygame.K_1:
                     truss.set_material("Steel")
                 elif event.key == pygame.K_2:
@@ -243,6 +253,14 @@ while is_running:
                 elif btn_load.collidepoint(mouse_pos) and not is_playing:
                     current_mode = "LOAD"
                     input_active = False
+                elif btn_benchmark.collidepoint(mouse_pos) and not is_playing:
+                    show_benchmark_hud = not show_benchmark_hud
+                    if show_benchmark_hud:
+                        truss.load_benchmark_case()
+                        selected_node_idx = None
+                        selected_beam_idx = None
+                        active_node_bnd = None
+                        first_break_gravity = None
                 continue
 
             if input_active:
@@ -273,6 +291,7 @@ while is_running:
                 elif current_mode == "NODE" and clicked_node_idx is None:
                     truss.add_node(mouse_pos[0], mouse_pos[1], snap_enabled=grid_enabled, grid_size=GRID_SIZE)
                     first_break_gravity = None
+                    show_benchmark_hud = False
                 elif current_mode == "BEAM":
                     if clicked_node_idx is not None:
                         if active_node_bnd is None: active_node_bnd = clicked_node_idx
@@ -280,15 +299,18 @@ while is_running:
                             truss.add_beam(active_node_bnd, clicked_node_idx)
                             active_node_bnd = None
                             first_break_gravity = None
+                            show_benchmark_hud = False
                     else: active_node_bnd = None
             elif event.button == 3 and clicked_node_idx is not None:
                 truss.nodes[clicked_node_idx].toggle_support()
                 first_break_gravity = None
+                show_benchmark_hud = False
 
     if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not input_active:
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
             first_break_gravity = None
+            show_benchmark_hud = False
         if keys[pygame.K_UP]:
             truss.nodes[selected_node_idx].load_y -= 1000.0
         if keys[pygame.K_DOWN]:
@@ -358,13 +380,21 @@ while is_running:
     pygame.draw.rect(screen, COLOR_PANEL_BG, sidebar_rect)
     pygame.draw.line(screen, COLOR_UI_BORDER, (140, 0), (140, 700), 2)
     
-    modes_list = [(btn_select, "1. Select", "SELECT"), (btn_node, "2. + Node", "NODE"), (btn_beam, "3. + Beam", "BEAM"), (btn_load, "4. + Load", "LOAD")]
+    modes_list = [
+        (btn_select, "1. Select", "SELECT"), 
+        (btn_node, "2. + Node", "NODE"), 
+        (btn_beam, "3. + Beam", "BEAM"), 
+        (btn_load, "4. + Load", "LOAD")
+    ]
     for btn, label, mode in modes_list:
         pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_playing else COLOR_BACKGROUND, btn, border_radius=4)
         screen.blit(font_body.render(label, True, COLOR_TEXT_MAIN), (btn.x + 12, btn.y + 10))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 275), (130, 275), 1)
-    screen.blit(font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 295))
+    pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and not is_playing else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
+    screen.blit(font_body.render("5. Benchmark", True, COLOR_TEXT_MAIN), (btn_benchmark.x + 12, btn_benchmark.y + 10))
+
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 310), (130, 310), 1)
+    screen.blit(font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 325))
     
     total_mass = 0.0
     max_util = 0.0
@@ -379,9 +409,9 @@ while is_running:
     if selected_beam_idx is not None and hasattr(truss.beams[selected_beam_idx], 'is_broken') and truss.beams[selected_beam_idx].is_broken:
         selected_beam_idx = None
     
-    screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 325))
+    screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 350))
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(fos_label, (15, 350))
+    screen.blit(fos_label, (15, 375))
     
     if not truss.is_stable:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
@@ -391,9 +421,9 @@ while is_running:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
         fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 348))
+    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 373))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 390), (130, 390), 1)
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 410), (130, 410), 1)
     pygame.draw.rect(screen, (30, 50, 35) if is_playing else COLOR_BACKGROUND, btn_play, border_radius=4)
     pygame.draw.rect(screen, COLOR_PLAY_GREEN if is_playing else COLOR_UI_BORDER, btn_play, width=1, border_radius=4)
     screen.blit(font_header.render("|| Pause" if is_playing else "> Play", True, COLOR_PLAY_GREEN if is_playing else COLOR_TEXT_MAIN), (btn_play.x + 20, btn_play.y + 10))
@@ -465,13 +495,68 @@ while is_running:
         pygame.draw.rect(screen, COLOR_LOAD, alert, width=1, border_radius=6)
         screen.blit(font_header.render(txt, True, COLOR_HIGHLIGHT), (alert.x + 15, alert.y + 14))
 
+    if show_benchmark_hud and truss.is_stable:
+        metrics = calculate_benchmark_metrics(truss)
+        if metrics is not None:
+            bhud_w, bhud_h = 430, 275
+            bhud_x = sim_rect.left + 15
+            bhud_y = sim_rect.top + 15
+            bhud_surface = pygame.Surface((bhud_w, bhud_h), pygame.SRCALPHA)
+            pygame.draw.rect(bhud_surface, (18, 18, 20, 220), (0, 0, bhud_w, bhud_h), border_radius=6)
+            pygame.draw.rect(bhud_surface, (63, 63, 70, 255), (0, 0, bhud_w, bhud_h), width=1, border_radius=6)
+            
+            bhud_surface.blit(font_header.render("TEXTBOOK BENCHMARK METRICS", True, COLOR_TEXT_MAIN), (15, 12))
+            bhud_surface.blit(font_body.render("Case: Determinant Cantilever (3-Node, 50kN Load)", True, COLOR_TEXT_MUTED), (15, 32))
+            pygame.draw.line(bhud_surface, COLOR_UI_BORDER, (10, 50), (bhud_w - 10, 50), 1)
+            
+            rows = [
+                ("Diag Force (Theory):", f"{metrics['diag_force_theory']/1000.0:.2f} kN", COLOR_TEXT_MUTED),
+                (f"Diag Force (Solver):", f"{metrics['diag_force_num']/1000.0:.2f} kN  [Err: {metrics['diag_force_err']:.4f}%]", COLOR_TEXT_MAIN),
+                ("Horiz Force (Theory):", f"{metrics['horiz_force_theory']/1000.0:.2f} kN", COLOR_TEXT_MUTED),
+                (f"Horiz Force (Solver):", f"{metrics['horiz_force_num']/1000.0:.2f} kN  [Err: {metrics['horiz_force_err']:.4f}%]", COLOR_TEXT_MAIN),
+                ("Tip Disp X (Theory):", f"{metrics['dx_theory']*1000.0:.4f} mm", COLOR_TEXT_MUTED),
+                (f"Tip Disp X (Solver):", f"{metrics['dx_num']*1000.0:.4f} mm  [Err: {metrics['dx_err']:.4f}%]", COLOR_TEXT_MAIN),
+                ("Tip Disp Y (Theory):", f"{metrics['dy_theory']*1000.0:.4f} mm", COLOR_TEXT_MUTED),
+                (f"Tip Disp Y (Solver):", f"{metrics['dy_num']*1000.0:.4f} mm  [Err: {metrics['dy_err']:.4f}%]", COLOR_TEXT_MAIN)
+            ]
+            
+            curr_y = 62
+            for label, val_str, txt_color in rows:
+                bhud_surface.blit(font_body.render(label, True, txt_color), (15, curr_y))
+                
+                if "Theory" in label:
+                    bhud_surface.blit(font_body.render(val_str, True, COLOR_TEXT_MAIN), (170, curr_y))
+                else:
+                    if "[Err: 0.0000%]" in val_str or "e-1" in val_str or "e-2" in val_str:
+                        err_color = COLOR_ZERO_LOAD
+                    else:
+                        err_color = COLOR_TEXT_MAIN
+                    
+                    parts = val_str.split("  ")
+                    bhud_surface.blit(font_body.render(parts[0], True, COLOR_TEXT_MAIN), (170, curr_y))
+                    if len(parts) > 1:
+                        bhud_surface.blit(font_body.render(parts[1], True, err_color), (265, curr_y))
+                        
+                curr_y += 24
+                
+            screen.blit(bhud_surface, (bhud_x, bhud_y))
+        else:
+            bhud_w, bhud_h = 320, 45
+            bhud_x = sim_rect.left + 15
+            bhud_y = sim_rect.top + 15
+            bhud_surface = pygame.Surface((bhud_w, bhud_h), pygame.SRCALPHA)
+            pygame.draw.rect(bhud_surface, (18, 18, 20, 220), (0, 0, bhud_w, bhud_h), border_radius=6)
+            pygame.draw.rect(bhud_surface, (127, 29, 29, 255), (0, 0, bhud_w, bhud_h), width=1, border_radius=6)
+            bhud_surface.blit(font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
+            screen.blit(bhud_surface, (bhud_x, bhud_y))
+
     if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and truss.is_stable:
         lines = []
         header_text = ""
         if selected_beam_idx is not None:
             beam = truss.beams[selected_beam_idx]
             header_text = "STRUCTURAL ELEMENT"
-            length_m = truss.get_beam_length(beam)
+            length_m = truss.get_beam_length(beam) 
             stress_m_pa = beam.stress / 1e6               
             force_k_n = beam.force / 1000.0               
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
@@ -491,13 +576,9 @@ while is_running:
                 
             net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
             
-            # Map pixels relative to canvas start window space over system multiplier for clean physical coordinates
-            phys_x = (node.x - 160) / truss.PIXELS_PER_METER
-            phys_y = (WINDOW_HEIGHT - 40 - node.y) / truss.PIXELS_PER_METER # Cartesian inversion style
-            
             lines = [
                 f"Type: {support_str}", 
-                f"Coords: ({phys_x:.2f} m, {phys_y:.2f} m)", 
+                f"Coords: ({int(node.x)}, {int(node.y)})", 
                 f"Net Load: {net_magnitude:.1f} kN",
                 f"Load X: {node.load_x / 1000.0:.1f} kN", 
                 f"Load Y: {effective_y / 1000.0:.1f} kN"
@@ -568,8 +649,8 @@ while is_running:
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity):
         grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
-    screen.blit(font_body.render(f"SCALE: 1 Grid Sq (20px) = 0.25 m | SNAP: {'ENABLED' if grid_enabled else 'DISABLED'} [G] | DEFORM: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-    screen.blit(font_body.render("Keys: [1-3] Material | [R] Reset | [SPACE] Play/Pause | Arrow Keys adjust loads | [ / ] dimensions | [M] alloy | [P] structural profile", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
+    screen.blit(font_body.render("Keys: [1-3] Material | [R] Reset | [SPACE] Play/Pause | Arrow Keys adjust loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark shortcut", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
     clock.tick(60)

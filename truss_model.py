@@ -2,14 +2,14 @@ import math
 
 class Node:
     def __init__(self, x, y):
-        self.x = x  # Raw screen pixels
-        self.y = y  # Raw screen pixels
+        self.x = x
+        self.y = y
         self.is_anchor_x = False
         self.is_anchor_y = False
-        self.load_x = 0.0  # Force in Newtons
-        self.load_y = 0.0  # Force in Newtons
-        self.rx = 0.0      # Reaction in Newtons
-        self.ry = 0.0      # Reaction in Newtons
+        self.load_x = 0.0
+        self.load_y = 0.0
+        self.rx = 0.0
+        self.ry = 0.0
 
     def toggle_support(self):
         if not self.is_anchor_x and not self.is_anchor_y:
@@ -28,13 +28,13 @@ class Beam:
         self.node_b = node_b_index
         self.material = material_name
         self.profile = "Square Tube"
-        self.dim_w = 0.05  # Outer width/diameter in meters
-        self.dim_t = 0.005 # Wall thickness in meters
-        self.area = 0.0    # Cross-sectional area in m²
-        self.inertia = 0.0 # Moment of inertia in m⁴
-        self.modulus = 200e9 # Elastic Modulus in Pa
-        self.stress = 0.0   # Stress in Pa
-        self.force = 0.0    # Axial force in Newtons
+        self.dim_w = 0.05
+        self.dim_t = 0.005
+        self.area = 0.0
+        self.inertia = 0.0
+        self.modulus = 200e9
+        self.stress = 0.0
+        self.force = 0.0
         self.is_broken = False
         self.broken_at_gravity = None
         
@@ -52,7 +52,7 @@ class Beam:
 
     def adjust_dimension(self, delta):
         self.dim_w = max(0.01, min(0.3, self.dim_w + delta))
-        if self.profile in ["Square Tube", "H-Beam"]:
+        if self.profile == "Square Tube" or self.profile == "H-Beam":
             self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t + delta * 0.1))
         self.recalculate_geometry()
 
@@ -81,15 +81,13 @@ class Beam:
             self.inertia = (math.pi * (r * r * r * r)) / 4.0
 
 class TrussSystem:
-    # 20 pixels = 0.25 meters -> 1 pixel = 0.0125 meters -> 80 pixels = 1.0 meter
-    PIXELS_PER_METER = 80.0
-
     def __init__(self):
         self.nodes = []
         self.beams = []
         self.active_material = "Steel"
         self.displacements = None
         self.is_stable = True
+        self.PIXELS_PER_METER = 80.0
 
     def set_material(self, material_name):
         if material_name in ["Steel", "Aluminum", "Titanium"]:
@@ -119,11 +117,36 @@ class TrussSystem:
         return len(self.beams) - 1
 
     def get_beam_length(self, beam):
-        """Returns the actual structural length of the element in METERS."""
         node_a = self.nodes[beam.node_a]
         node_b = self.nodes[beam.node_b]
         pixel_dist = math.hypot(node_b.x - node_a.x, node_b.y - node_a.y)
         return pixel_dist / self.PIXELS_PER_METER
+
+    def load_benchmark_case(self):
+        self.clear()
+        self.active_material = "Steel"
+        
+        self.add_node(450, 150)
+        self.add_node(450, 390)
+        self.add_node(690, 390)
+        
+        self.nodes[0].is_anchor_x = True
+        self.nodes[0].is_anchor_y = True
+        self.nodes[1].is_anchor_x = True
+        self.nodes[1].is_anchor_y = True
+        
+        self.nodes[2].load_y = 50000.0
+        
+        self.add_beam(0, 1)
+        self.add_beam(1, 2)
+        self.add_beam(0, 2)
+        
+        for beam in self.beams:
+            beam.dim_w = 0.05
+            beam.dim_t = 0.005
+            beam.profile = "Square Tube"
+            beam.update_material_properties("Steel")
+            beam.recalculate_geometry()
 
     def clear(self):
         self.nodes.clear()

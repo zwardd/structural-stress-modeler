@@ -38,16 +38,14 @@ def solve_truss(truss):
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
-        
-        # Pull length directly in physical units (meters)
         L = truss.get_beam_length(beam)
         if L < 1e-3:
             continue
-            
-        # Directions calculated tracking physical system layout
-        cos_theta = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
-        sin_theta = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)  
-        
+        dx_pixels = node_b.x - node_a.x
+        dy_pixels = node_b.y - node_a.y
+        pixel_length = math.hypot(dx_pixels, dy_pixels)
+        cos_theta = dx_pixels / pixel_length
+        sin_theta = -dy_pixels / pixel_length  
         k_element = (beam.area * beam.modulus) / L
         c2 = cos_theta ** 2
         s2 = sin_theta ** 2
@@ -110,15 +108,67 @@ def solve_truss(truss):
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
         L = truss.get_beam_length(beam)
-        
-        cos_theta = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
-        sin_theta = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)
-        
+        dx_pixels = node_b.x - node_a.x
+        dy_pixels = node_b.y - node_a.y
+        pixel_length = math.hypot(dx_pixels, dy_pixels)
+        cos_theta = dx_pixels / pixel_length
+        sin_theta = -dy_pixels / pixel_length
         u_ax = displacements[idx_a * 2]
         u_ay = displacements[idx_a * 2 + 1]
         u_bx = displacements[idx_b * 2]
         u_by = displacements[idx_b * 2 + 1]
-        
         delta = (u_bx - u_ax) * cos_theta + (u_by - u_ay) * sin_theta
         beam.stress = (delta / L) * beam.modulus
         beam.force = beam.stress * beam.area
+
+def calculate_benchmark_metrics(truss):
+    if len(truss.nodes) != 3 or len(truss.beams) != 3:
+        return None
+        
+    diag_beam = None
+    horiz_beam = None
+    for b in truss.beams:
+        if (b.node_a == 0 and b.node_b == 2) or (b.node_a == 2 and b.node_b == 0):
+            diag_beam = b
+        elif (b.node_a == 1 and b.node_b == 2) or (b.node_a == 2 and b.node_b == 1):
+            horiz_beam = b
+            
+    if diag_beam is None or horiz_beam is None or truss.displacements is None:
+        return None
+
+    p_load = 50000.0
+    l_m = 3.0
+    a_m2 = diag_beam.area
+    e_pa = diag_beam.modulus
+
+    f_diag_theory = p_load * math.sqrt(2)
+    f_horiz_theory = -p_load
+
+    dx_theory = (p_load * l_m) / (a_m2 * e_pa)
+    dy_theory = -(p_load * l_m * (1.0 + 2.0 * math.sqrt(2))) / (a_m2 * e_pa)
+
+    f_diag_num = diag_beam.force
+    f_horiz_num = horiz_beam.force
+    
+    dx_num = -truss.displacements[4]  
+    dy_num = truss.displacements[5]
+
+    def get_pct_error(numerical, theoretical):
+        if theoretical == 0:
+            return 0.0 if numerical == 0 else float('inf')
+        return abs((numerical - theoretical) / theoretical) * 100.0
+
+    return {
+        "diag_force_theory": f_diag_theory,
+        "diag_force_num": f_diag_num,
+        "diag_force_err": get_pct_error(f_diag_num, f_diag_theory),
+        "horiz_force_theory": f_horiz_theory,
+        "horiz_force_num": f_horiz_num,
+        "horiz_force_err": get_pct_error(f_horiz_num, f_horiz_theory),
+        "dx_theory": dx_theory,
+        "dx_num": dx_num,
+        "dx_err": get_pct_error(dx_num, dx_theory),
+        "dy_theory": dy_theory,
+        "dy_num": dy_num,
+        "dy_err": get_pct_error(dy_num, dy_theory)
+    }
