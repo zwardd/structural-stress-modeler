@@ -38,11 +38,16 @@ def solve_truss(truss):
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
+        
+        # Pull length directly in physical units (meters)
         L = truss.get_beam_length(beam)
         if L < 1e-3:
             continue
-        cos_theta = (node_b.x - node_a.x) / L
-        sin_theta = -(node_b.y - node_a.y) / L  
+            
+        # Directions calculated tracking physical system layout
+        cos_theta = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
+        sin_theta = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)  
+        
         k_element = (beam.area * beam.modulus) / L
         c2 = cos_theta ** 2
         s2 = sin_theta ** 2
@@ -105,12 +110,15 @@ def solve_truss(truss):
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
         L = truss.get_beam_length(beam)
-        cos_theta = (node_b.x - node_a.x) / L
-        sin_theta = -(node_b.y - node_a.y) / L
+        
+        cos_theta = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
+        sin_theta = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)
+        
         u_ax = displacements[idx_a * 2]
         u_ay = displacements[idx_a * 2 + 1]
         u_bx = displacements[idx_b * 2]
         u_by = displacements[idx_b * 2 + 1]
+        
         delta = (u_bx - u_ax) * cos_theta + (u_by - u_ay) * sin_theta
         beam.stress = (delta / L) * beam.modulus
         beam.force = beam.stress * beam.area

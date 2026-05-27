@@ -72,7 +72,7 @@ def calculate_utilization(beam):
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
     if beam.stress < -1e-2:
-        length_m = truss.get_beam_length(beam) / 20.0
+        length_m = truss.get_beam_length(beam)
         if length_m > 0:
             p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
             buckle_util = abs(beam.force) / p_crit
@@ -124,8 +124,9 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
 def get_def_pos(idx, node):
     if truss.displacements is None or not show_deformed or not truss.is_stable:
         return node.x, node.y
-    dx = truss.displacements[idx * 2] * current_def_scale
-    dy = -truss.displacements[idx * 2 + 1] * current_def_scale
+    # Convert real meter structural displacement back to pixel shifts
+    dx = truss.displacements[idx * 2] * current_def_scale * truss.PIXELS_PER_METER
+    dy = -truss.displacements[idx * 2 + 1] * current_def_scale * truss.PIXELS_PER_METER
     return node.x + dx, node.y + dy
 
 is_running = True
@@ -194,10 +195,13 @@ while is_running:
                     truss.set_material("Aluminum")
                 elif event.key == pygame.K_3:
                     truss.set_material("Titanium")
+                elif event.key == pygame.K_p and selected_beam_idx is not None:
+                    truss.beams[selected_beam_idx].cycle_profile()
+                    first_break_gravity = None
                 elif event.key == pygame.K_LEFTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_area(-5.0e-4)
+                    truss.beams[selected_beam_idx].adjust_dimension(-0.005)
                 elif event.key == pygame.K_RIGHTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_area(5.0e-4)
+                    truss.beams[selected_beam_idx].adjust_dimension(0.005)
                 elif event.key == pygame.K_m and selected_beam_idx is not None:
                     b = truss.beams[selected_beam_idx]
                     m_list = ["Steel", "Aluminum", "Titanium"]
@@ -367,7 +371,7 @@ while is_running:
     for b in truss.beams:
         if hasattr(b, 'is_broken') and b.is_broken: continue
         specs = MATERIAL_SPECS.get(b.material, MATERIAL_SPECS["Steel"])
-        length_m = truss.get_beam_length(b) / 20.0
+        length_m = truss.get_beam_length(b)
         total_mass += length_m * b.area * specs["density"]
         max_util = max(max_util, calculate_utilization(b))
         
@@ -413,8 +417,8 @@ while is_running:
         if show_deformed and truss.displacements is not None and truss.is_stable and is_playing:
             pygame.draw.line(screen, (45, 45, 50), (truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y), (truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y), 1)
         
-        thickness_pixels = int((beam.area / 2.5e-3) * 4.0)
-        thickness_pixels = max(2, min(14, thickness_pixels))
+        thickness_pixels = int(beam.dim_w * 140.0)
+        thickness_pixels = max(2, min(16, thickness_pixels))
         
         if i == selected_beam_idx:
             pygame.draw.line(screen, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness_pixels + 4)
@@ -467,15 +471,15 @@ while is_running:
         if selected_beam_idx is not None:
             beam = truss.beams[selected_beam_idx]
             header_text = "STRUCTURAL ELEMENT"
-            length_m = truss.get_beam_length(beam) / 20.0  
+            length_m = truss.get_beam_length(beam)
             stress_m_pa = beam.stress / 1e6               
             force_k_n = beam.force / 1000.0               
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
             utilization_pct = calculate_utilization(beam) * 100.0
-            lines = [f"Alloy: {beam.material} [M]", f"Area: {beam.area * 1e4:.1f} cm² [ [ ] / [ ] ]", f"Length: {length_m:.2f} m", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa", f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"]
+            lines = [f"Alloy: {beam.material} [M]", f"Profile: {beam.profile} [P]", f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", f"Thickness: {beam.dim_t * 100.0:.1f} cm", f"Area: {beam.area * 1e4:.1f} cm²", f"Length: {length_m:.2f} m", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa", f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"]
             if nature == "COMPRESSION" and length_m > 0:
                 p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
-                lines.insert(4, f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
+                lines.insert(7, f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
         elif selected_node_idx is not None:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
@@ -487,9 +491,13 @@ while is_running:
                 
             net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
             
+            # Map pixels relative to canvas start window space over system multiplier for clean physical coordinates
+            phys_x = (node.x - 160) / truss.PIXELS_PER_METER
+            phys_y = (WINDOW_HEIGHT - 40 - node.y) / truss.PIXELS_PER_METER # Cartesian inversion style
+            
             lines = [
                 f"Type: {support_str}", 
-                f"Coords: ({int(node.x)}, {int(node.y)})", 
+                f"Coords: ({phys_x:.2f} m, {phys_y:.2f} m)", 
                 f"Net Load: {net_magnitude:.1f} kN",
                 f"Load X: {node.load_x / 1000.0:.1f} kN", 
                 f"Load Y: {effective_y / 1000.0:.1f} kN"
@@ -560,8 +568,8 @@ while is_running:
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity):
         grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
-    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-    screen.blit(font_body.render("Keys: [1-3] Material | [R] Reset | [SPACE] Play/Pause | Arrow Keys adjust loads | [ / ] element area | [M] cycle alloy", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+    screen.blit(font_body.render(f"SCALE: 1 Grid Sq (20px) = 0.25 m | SNAP: {'ENABLED' if grid_enabled else 'DISABLED'} [G] | DEFORM: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
+    screen.blit(font_body.render("Keys: [1-3] Material | [R] Reset | [SPACE] Play/Pause | Arrow Keys adjust loads | [ / ] dimensions | [M] alloy | [P] structural profile", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
     clock.tick(60)
