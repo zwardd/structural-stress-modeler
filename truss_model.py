@@ -74,7 +74,9 @@ class Beam:
             tw = t
             tf = t
             self.area = 2 * (b * tf) + (h - 2 * tf) * tw
-            self.inertia = ((b * (h * h * h)) - ((b - tw) * ((h - 2 * tf) * (h - 2 * tf) * (h - 2 * tf)))) / 12.0
+            I_xx = ((b * (h * h * h)) - ((b - tw) * ((h - 2 * tf) * (h - 2 * tf) * (h - 2 * tf)))) / 12.0
+            I_yy = (2 * tf * (b * b * b) + (h - 2 * tf) * (tw * tw * tw)) / 12.0
+            self.inertia = min(I_xx, I_yy)
         else:
             r = w / 2.0
             self.area = math.pi * (r * r)
