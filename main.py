@@ -159,6 +159,64 @@ def get_def_pos(idx, node):
     dy = -truss.displacements[idx * 2 + 1] * current_def_scale
     return node.x + dx, node.y + dy
 
+def draw_profile_preview(surf, x, y, width, height, beam):
+    pygame.draw.rect(surf, (12, 12, 14), (x, y, width, height), border_radius=4)
+    pygame.draw.rect(surf, COLOR_UI_BORDER, (x, y, width, height), width=1, border_radius=4)
+    
+    center_x = int(x + width // 2)
+    center_y = int(y + height // 2)
+    
+    max_d = 0.32 
+    scale = (width - 16) / max_d
+    
+    outer_dim = int(beam.dim_w * scale)
+    outer_dim = max(6, min(width - 12, outer_dim))
+    
+    color_fill = (55, 65, 81)
+    color_line = COLOR_TEXT_MUTED
+    
+    if beam.profile == "Square Tube":
+        ox = center_x - outer_dim // 2
+        oy = center_y - outer_dim // 2
+        pygame.draw.rect(surf, color_fill, (ox, oy, outer_dim, outer_dim))
+        pygame.draw.rect(surf, color_line, (ox, oy, outer_dim, outer_dim), width=1)
+        
+        inner_dim = int((beam.dim_w - 2 * beam.dim_t) * scale)
+        if inner_dim > 2:
+            ix = center_x - inner_dim // 2
+            iy = center_y - inner_dim // 2
+            pygame.draw.rect(surf, (12, 12, 14), (ix, iy, inner_dim, inner_dim))
+            pygame.draw.rect(surf, color_line, (ix, iy, inner_dim, inner_dim), width=1)
+            
+    elif beam.profile == "H-Beam":
+        w = outer_dim
+        h = outer_dim
+        t = max(1, int(beam.dim_t * scale))
+        ox = center_x - w // 2
+        oy = center_y - h // 2
+        
+        pygame.draw.rect(surf, color_fill, (ox, oy, w, t))
+        pygame.draw.rect(surf, color_line, (ox, oy, w, t), width=1)
+        
+        pygame.draw.rect(surf, color_fill, (ox, oy + h - t, w, t))
+        pygame.draw.rect(surf, color_line, (ox, oy + h - t, w, t), width=1)
+        
+        web_w = t
+        web_h = h - 2 * t
+        wx = center_x - web_w // 2
+        wy = oy + t
+        if web_h > 0:
+            pygame.draw.rect(surf, color_fill, (wx, wy, web_w, web_h))
+            pygame.draw.line(surf, color_line, (wx, wy), (wx, wy + web_h))
+            pygame.draw.line(surf, color_line, (wx + web_w, wy), (wx + web_w, wy + web_h))
+            
+    elif beam.profile == "Solid Bar":
+        radius = int(outer_dim // 2)
+        if radius > 1:
+            pygame.draw.circle(surf, color_fill, (center_x, center_y), radius)
+            pygame.draw.circle(surf, color_line, (center_x, center_y), radius, width=1)
+            pygame.draw.circle(surf, (12, 12, 14), (center_x, center_y), max(1, radius // 6))
+
 is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
@@ -239,9 +297,15 @@ while is_running:
                     truss.beams[selected_beam_idx].cycle_profile()
                     first_break_gravity = None
                 elif event.key == pygame.K_LEFTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_dimension(-0.005)
+                    b = truss.beams[selected_beam_idx]
+                    if b.dim_w > 0.011: 
+                        b.adjust_dimension(-0.005)
+                        first_break_gravity = None
                 elif event.key == pygame.K_RIGHTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_dimension(0.005)
+                    b = truss.beams[selected_beam_idx]
+                    if b.dim_w < 0.149: 
+                        b.adjust_dimension(0.005)
+                        first_break_gravity = None
                 elif event.key == pygame.K_m and selected_beam_idx is not None:
                     b = truss.beams[selected_beam_idx]
                     m_list = ["Steel", "Aluminum", "Titanium"]
@@ -583,7 +647,9 @@ while is_running:
     if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and truss.is_stable:
         lines = []
         header_text = ""
-        if selected_beam_idx is not None:
+        is_beam_selected = selected_beam_idx is not None
+        
+        if is_beam_selected:
             beam = truss.beams[selected_beam_idx]
             header_text = "STRUCTURAL ELEMENT"
             length_m = truss.get_beam_length(beam) 
@@ -591,21 +657,32 @@ while is_running:
             force_k_n = beam.force / 1000.0               
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
             utilization_pct = calculate_utilization(beam) * 100.0
-            lines = [f"Alloy: {beam.material} [M]", f"Profile: {beam.profile} [P]", f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", f"Thickness: {beam.dim_t * 100.0:.1f} cm", f"Area: {beam.area * 1e4:.1f} cm²", f"Length: {length_m:.2f} m", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa", f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"]
+            
+            top_lines = [
+                f"Alloy: {beam.material} [M]",
+                f"Force: {abs(force_k_n):.1f} kN",
+                f"Stress: {abs(stress_m_pa):.1f} MPa"
+            ]
             if nature == "COMPRESSION" and length_m > 0:
                 p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
-                lines.insert(7, f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
+                top_lines.append(f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
+            top_lines.extend([f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"])
+            
+            geom_lines = [
+                f"Profile: {beam.profile} [P]",
+                f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]",
+                f"Thickness: {beam.dim_t * 100.0:.1f} cm",
+                f"Area: {beam.area * 1e4:.1f} cm²",
+                f"Length: {length_m:.2f} m"
+            ]
         elif selected_node_idx is not None:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
             support_str = "Pin Support" if node.is_anchor_x and node.is_anchor_y else ("Roller Support" if node.is_anchor_y else "Free Joint")
-            
             effective_y = node.load_y
             if is_playing:
                 effective_y += 1000.0 * gravity_multiplier
-                
             net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
-            
             lines = [
                 f"Type: {support_str}", 
                 f"Coords: ({int(node.x)}, {int(node.y)})", 
@@ -619,11 +696,14 @@ while is_running:
                 lines.append(f"React X: {node.rx / 1000.0:.1f} kN")
                 lines.append(f"React Y: {node.ry / 1000.0:.1f} kN")
 
-        hud_w = max(240, max([font_body.size(line)[0] for line in lines]) + 40) if lines else 240
-        hud_h = 45 + (len(lines) * 24)
-        
-        if current_mode == "LOAD" and selected_node_idx is not None:
-            hud_h += 75
+        if is_beam_selected:
+            hud_w = 340
+            hud_h = 55 + (len(top_lines) * 24) + 12 + 95
+        else:
+            hud_w = max(240, max([font_body.size(line)[0] for line in lines]) + 40) if lines else 240
+            hud_h = 45 + (len(lines) * 24)
+            if current_mode == "LOAD" and selected_node_idx is not None:
+                hud_h += 75
             
         hud_x = sim_rect.right - hud_w - 15
         hud_surface = pygame.Surface((hud_w, hud_h), pygame.SRCALPHA)
@@ -632,46 +712,69 @@ while is_running:
         hud_surface.blit(font_header.render(header_text, True, COLOR_TEXT_MAIN), (15, 12))
 
         local_y = 40
-        for line in lines:
-            if ":" in line:
+        if is_beam_selected:
+            for line in top_lines:
                 parts = line.split(":", 1)
                 lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
                 hud_surface.blit(lbl_surface, (15, local_y))
                 hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (15 + lbl_surface.get_width() + 4, local_y))
-            else:
-                hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (15, local_y))
-            local_y += 24
-            
-        if current_mode == "LOAD" and selected_node_idx is not None:
-            local_y += 5
+                local_y += 24
+                
+            local_y += 4
             pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
-            local_y += 10
+            local_y += 12
             
-            box_x = pygame.Rect(15, local_y, 95, 25)
-            box_y = pygame.Rect(120, local_y, 95, 25)
+            draw_profile_preview(hud_surface, 15, local_y, 85, 85, truss.beams[selected_beam_idx])
             
-            mx, my = pygame.mouse.get_pos()
-            lx, ly = mx - hud_x, my - (sim_rect.top + 15)
-            
-            if pygame.mouse.get_pressed()[0]:
-                if box_x.collidepoint((lx, ly)):
-                    input_active = True
-                    input_type = "X"
-                    input_buffer = ""
-                elif box_y.collidepoint((lx, ly)):
-                    input_active = True
-                    input_type = "Y"
-                    input_buffer = ""
-                    
-            pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "X") else (10, 10, 12), box_x, border_radius=4)
-            pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_x, width=1, border_radius=4)
-            hud_surface.blit(font_body.render("FX: " + (input_buffer if (input_active and input_type == "X") else f"{truss.nodes[selected_node_idx].load_x/1000.0:.1f}") + ("_" if (input_active and input_type == "X") else " kN"), True, COLOR_TEXT_MAIN), (22, local_y + 5))
-            
-            pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "Y") else (10, 10, 12), box_y, border_radius=4)
-            pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_y, width=1, border_radius=4)
-            hud_surface.blit(font_body.render("FY: " + (input_buffer if (input_active and input_type == "Y") else f"{truss.nodes[selected_node_idx].load_y/1000.0:.1f}") + ("_" if (input_active and input_type == "Y") else " kN"), True, COLOR_TEXT_MAIN), (127, local_y + 5))
-            
-            hud_surface.blit(font_body.render("Click box, type value, press Enter", True, COLOR_TEXT_MUTED), (15, local_y + 35))
+            sub_y = local_y - 2
+            for line in geom_lines:
+                parts = line.split(":", 1)
+                lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
+                hud_surface.blit(lbl_surface, (115, sub_y))
+                hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (115 + lbl_surface.get_width() + 4, sub_y))
+                sub_y += 17
+                
+        else:
+            for line in lines:
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
+                    hud_surface.blit(lbl_surface, (15, local_y))
+                    hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (15 + lbl_surface.get_width() + 4, local_y))
+                else:
+                    hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (15, local_y))
+                local_y += 24
+                
+            if current_mode == "LOAD" and selected_node_idx is not None:
+                local_y += 5
+                pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
+                local_y += 10
+                
+                box_x = pygame.Rect(15, local_y, 95, 25)
+                box_y = pygame.Rect(120, local_y, 95, 25)
+                
+                mx, my = pygame.mouse.get_pos()
+                lx, ly = mx - hud_x, my - (sim_rect.top + 15)
+                
+                if pygame.mouse.get_pressed()[0]:
+                    if box_x.collidepoint((lx, ly)):
+                        input_active = True
+                        input_type = "X"
+                        input_buffer = ""
+                    elif box_y.collidepoint((lx, ly)):
+                        input_active = True
+                        input_type = "Y"
+                        input_buffer = ""
+                        
+                pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "X") else (10, 10, 12), box_x, border_radius=4)
+                pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_x, width=1, border_radius=4)
+                hud_surface.blit(font_body.render("FX: " + (input_buffer if (input_active and input_type == "X") else f"{truss.nodes[selected_node_idx].load_x/1000.0:.1f}") + ("_" if (input_active and input_type == "X") else " kN"), True, COLOR_TEXT_MAIN), (22, local_y + 5))
+                
+                pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "Y") else (10, 10, 12), box_y, border_radius=4)
+                pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_y, width=1, border_radius=4)
+                hud_surface.blit(font_body.render("FY: " + (input_buffer if (input_active and input_type == "Y") else f"{truss.nodes[selected_node_idx].load_y/1000.0:.1f}") + ("_" if (input_active and input_type == "Y") else " kN"), True, COLOR_TEXT_MAIN), (127, local_y + 5))
+                
+                hud_surface.blit(font_body.render("Click box, type value, press Enter", True, COLOR_TEXT_MUTED), (15, local_y + 35))
 
         screen.blit(hud_surface, (hud_x, sim_rect.top + 15))
 
