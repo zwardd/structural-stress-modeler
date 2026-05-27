@@ -83,20 +83,50 @@ def calculate_utilization(beam):
 def get_stress_color(beam):
     if not truss.is_stable:
         return COLOR_TEXT_MUTED
-    utilization = calculate_utilization(beam)
-    if utilization >= 1.0:
-        return COLOR_MAX_LOAD
-    if utilization < 0.5:
-        t = utilization / 0.5
-        r = int(COLOR_ZERO_LOAD[0] + (COLOR_MID_LOAD[0] - COLOR_ZERO_LOAD[0]) * t)
-        g = int(COLOR_ZERO_LOAD[1] + (COLOR_MID_LOAD[1] - COLOR_ZERO_LOAD[1]) * t)
-        b = int(COLOR_ZERO_LOAD[2] + (COLOR_MID_LOAD[2] - COLOR_ZERO_LOAD[2]) * t)
+    
+    if beam.is_broken or beam.force == 0.0:
+        return (180, 180, 185)
+        
+    specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
+    yield_util = abs(beam.stress) / specs["yield"]
+    
+    is_compression = beam.stress < -1e-2
+    
+    if is_compression:
+        length_m = truss.get_beam_length(beam)
+        buckle_util = 0.0
+        if length_m > 0:
+            p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
+            buckle_util = abs(beam.force) / p_crit
+        
+        utilization = max(yield_util, buckle_util)
+        if utilization >= 1.0:
+            return COLOR_MAX_LOAD
+            
+        if buckle_util > yield_util:
+            if utilization > 0.82:
+                pulse = (math.sin(pygame.time.get_ticks() * 0.015) + 1.0) / 2.0
+                return (int(235 + pulse * 20), int(110 - pulse * 40), int(15 - pulse * 15))
+            t = utilization
+            r = int(160 + (239 - 160) * t)
+            g = int(160 - (160 - 68) * t)
+            b = int(165 - (165 - 68) * t)
+            return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+        else:
+            t = utilization
+            r = int(180 + (234 - 180) * t)
+            g = int(180 - (180 - 179) * t)
+            b = int(185 - (185 - 8) * t)
+            return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
     else:
-        t = (utilization - 0.5) / 0.5
-        r = int(COLOR_MID_LOAD[0] + (COLOR_MAX_LOAD[0] - COLOR_MID_LOAD[0]) * t)
-        g = int(COLOR_MID_LOAD[1] + (COLOR_MAX_LOAD[1] - COLOR_MAX_LOAD[1]) * t)
-        b = int(COLOR_MID_LOAD[2] + (COLOR_MAX_LOAD[2] - COLOR_MAX_LOAD[2]) * t)
-    return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
+        utilization = yield_util
+        if utilization >= 1.0:
+            return (59, 130, 246)
+        t = utilization
+        r = int(180 - (180 - 34) * t)
+        g = int(180 + (211 - 180) * t)
+        b = int(185 + (238 - 185) * t)
+        return (max(0, min(255, r)), max(0, min(255, g)), max(0, min(255, b)))
 
 def point_to_line_distance(px, py, x1, y1, x2, y2):
     dx = x2 - x1
