@@ -33,6 +33,7 @@ class Beam:
         self.area = 0.0
         self.inertia = 0.0
         self.modulus = 200e9
+        self.density = 7850.0
         self.stress = 0.0
         self.force = 0.0
         self.is_broken = False
@@ -45,10 +46,13 @@ class Beam:
         self.material = material_name
         if material_name == "Aluminum":
             self.modulus = 70e9
+            self.density = 2700.0
         elif material_name == "Titanium":
             self.modulus = 114e9
+            self.density = 4430.0
         else:
             self.modulus = 200e9
+            self.density = 7850.0
 
     def adjust_dimension(self, delta):
         self.dim_w = max(0.01, min(0.3, self.dim_w + delta))
@@ -90,6 +94,7 @@ class TrussSystem:
         self.displacements = None
         self.is_stable = True
         self.PIXELS_PER_METER = 80.0
+        self.self_weight_enabled = True
 
     def set_material(self, material_name):
         if material_name in ["Steel", "Aluminum", "Titanium"]:
@@ -127,6 +132,7 @@ class TrussSystem:
     def load_benchmark_case(self):
         self.clear()
         self.active_material = "Steel"
+        self.self_weight_enabled = False
         
         self.add_node(450, 150)
         self.add_node(450, 390)

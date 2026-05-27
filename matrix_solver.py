@@ -1,7 +1,7 @@
 import numpy as np
 import math
 
-def solve_truss(truss):
+def solve_truss(truss, gravity_multiplier=0.0):
     num_nodes = len(truss.nodes)
     for node in truss.nodes:
         node.rx = 0.0
@@ -30,6 +30,17 @@ def solve_truss(truss):
         F_global[i * 2] = node.load_x
         F_global[i * 2 + 1] = -node.load_y
 
+    if truss.self_weight_enabled and gravity_multiplier > 0.0:
+        g = 9.81 * gravity_multiplier
+        for beam in truss.beams:
+            if hasattr(beam, 'is_broken') and beam.is_broken:
+                continue
+            length_m = truss.get_beam_length(beam)
+            weight = length_m * beam.area * beam.density * g
+            half_weight = weight / 2.0
+            F_global[beam.node_a * 2 + 1] -= half_weight
+            F_global[beam.node_b * 2 + 1] -= half_weight
+
     for beam in truss.beams:
         if hasattr(beam, 'is_broken') and beam.is_broken:
             continue  
@@ -38,64 +49,70 @@ def solve_truss(truss):
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
-        L = truss.get_beam_length(beam)
-        if L < 1e-3:
+        
+        dx = node_b.x - node_a.x
+        dy = -(node_b.y - node_a.y)
+        L = math.hypot(dx, dy) / truss.PIXELS_PER_METER
+        
+        if L < 1e-6:
             continue
-        dx_pixels = node_b.x - node_a.x
-        dy_pixels = node_b.y - node_a.y
-        pixel_length = math.hypot(dx_pixels, dy_pixels)
-        cos_theta = dx_pixels / pixel_length
-        sin_theta = -dy_pixels / pixel_length  
-        k_element = (beam.area * beam.modulus) / L
-        c2 = cos_theta ** 2
-        s2 = sin_theta ** 2
-        cs = cos_theta * sin_theta
-        k_local = np.array([
-            [ c2,  cs, -c2, -cs],
-            [ cs,  s2, -cs, -s2],
-            [-c2, -cs,  c2,  cs],
-            [-cs, -s2,  cs,  s2]
-        ]) * k_element
-        dof = [idx_a * 2, idx_a * 2 + 1, idx_b * 2, idx_b * 2 + 1]
-        for row_local, row_global in enumerate(dof):
-            for col_local, col_global in enumerate(dof):
-                K_global[row_global, col_global] += k_local[row_local, col_local]
+            
+        c = dx / (L * truss.PIXELS_PER_METER)
+        s = dy / (L * truss.PIXELS_PER_METER)
+        
+        AE_over_L = (beam.area * beam.modulus) / L
+        
+        k_element = AE_over_L * np.array([
+            [ c*c,  c*s, -c*c, -c*s],
+            [ c*s,  s*s, -c*s, -s*s],
+            [-c*c, -c*s,  c*c,  c*s],
+            [-c*s, -s*s,  c*s,  s*s]
+        ])
+        
+        indices = [idx_a*2, idx_a*2+1, idx_b*2, idx_b*2+1]
+        for i in range(4):
+            for j in range(4):
+                K_global[indices[i], indices[j]] += k_element[i, j]
 
-    K_orig = K_global.copy()
-    F_orig = F_global.copy()
-
-    for i, node in enumerate(truss.nodes):
-        if node.is_anchor_x or not node_has_connections[i]:
-            dof_x = i * 2
-            K_global[dof_x, :] = 0
-            K_global[:, dof_x] = 0
-            K_global[dof_x, dof_x] = 1.0
-            F_global[dof_x] = 0
-        if node.is_anchor_y or not node_has_connections[i]:
-            dof_y = i * 2 + 1
-            K_global[dof_y, :] = 0
-            K_global[:, dof_y] = 0
-            K_global[dof_y, dof_y] = 1.0
-            F_global[dof_y] = 0
-
-    try:
-        displacements = np.linalg.solve(K_global, F_global)
-        truss.displacements = displacements
-        truss.is_stable = True
-    except np.linalg.LinAlgError:
-        truss.displacements = None
-        truss.is_stable = False
-        for beam in truss.beams:
-            beam.force = 0.0
-            beam.stress = 0.0
-        return
-
-    reactions = K_orig.dot(displacements) - F_orig
+    boundary_conditions = []
     for i, node in enumerate(truss.nodes):
         if node.is_anchor_x:
-            node.rx = reactions[i * 2]
+            boundary_conditions.append(i * 2)
         if node.is_anchor_y:
-            node.ry = -reactions[i * 2 + 1]
+            boundary_conditions.append(i * 2 + 1)
+            
+        if not node_has_connections[i]:
+            if i * 2 not in boundary_conditions:
+                boundary_conditions.append(i * 2)
+            if i * 2 + 1 not in boundary_conditions:
+                boundary_conditions.append(i * 2 + 1)
+
+    free_dofs = [dof for dof in range(matrix_dim) if dof not in boundary_conditions]
+
+    if len(free_dofs) == 0:
+        truss.displacements = np.zeros(matrix_dim)
+        truss.is_stable = True
+        return
+
+    K_ff = K_global[np.ix_(free_dofs, free_dofs)]
+    F_f = F_global[free_dofs]
+
+    try:
+        if np.abs(np.linalg.det(K_ff)) < 1e-5:
+            truss.is_stable = False
+            truss.displacements = None
+            return
+        
+        U_f = np.linalg.solve(K_ff, F_f)
+        truss.is_stable = True
+    except np.linalg.LinAlgError:
+        truss.is_stable = False
+        truss.displacements = None
+        return
+
+    U_global = np.zeros(matrix_dim)
+    U_global[free_dofs] = U_f
+    truss.displacements = U_global
 
     for beam in truss.beams:
         if hasattr(beam, 'is_broken') and beam.is_broken:
@@ -107,19 +124,33 @@ def solve_truss(truss):
         idx_b = beam.node_b
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
-        L = truss.get_beam_length(beam)
-        dx_pixels = node_b.x - node_a.x
-        dy_pixels = node_b.y - node_a.y
-        pixel_length = math.hypot(dx_pixels, dy_pixels)
-        cos_theta = dx_pixels / pixel_length
-        sin_theta = -dy_pixels / pixel_length
-        u_ax = displacements[idx_a * 2]
-        u_ay = displacements[idx_a * 2 + 1]
-        u_bx = displacements[idx_b * 2]
-        u_by = displacements[idx_b * 2 + 1]
-        delta = (u_bx - u_ax) * cos_theta + (u_by - u_ay) * sin_theta
-        beam.stress = (delta / L) * beam.modulus
+        
+        dx = node_b.x - node_a.x
+        dy = -(node_b.y - node_a.y)
+        L = math.hypot(dx, dy) / truss.PIXELS_PER_METER
+        
+        c = dx / (L * truss.PIXELS_PER_METER)
+        s = dy / (L * truss.PIXELS_PER_METER)
+        
+        u_elem = np.array([
+            U_global[idx_a * 2],
+            U_global[idx_a * 2 + 1],
+            U_global[idx_b * 2],
+            U_global[idx_b * 2 + 1]
+        ])
+        
+        transformation = np.array([-c, -s, c, s])
+        delta_L = np.dot(transformation, u_elem)
+        
+        beam.stress = (beam.modulus * delta_L) / L
         beam.force = beam.stress * beam.area
+
+    F_reactions = np.dot(K_global, U_global) - F_global
+    for i, node in enumerate(truss.nodes):
+        if node.is_anchor_x:
+            node.rx = F_reactions[i * 2]
+        if node.is_anchor_y:
+            node.ry = -F_reactions[i * 2 + 1]
 
 def calculate_benchmark_metrics(truss):
     if len(truss.nodes) != 3 or len(truss.beams) != 3:
@@ -128,6 +159,8 @@ def calculate_benchmark_metrics(truss):
     diag_beam = None
     horiz_beam = None
     for b in truss.beams:
+        if b.profile != "Square Tube" or not math.isclose(b.dim_w, 0.05) or not math.isclose(b.dim_t, 0.005) or b.material != "Steel":
+            return None
         if (b.node_a == 0 and b.node_b == 2) or (b.node_a == 2 and b.node_b == 0):
             diag_beam = b
         elif (b.node_a == 1 and b.node_b == 2) or (b.node_a == 2 and b.node_b == 1):
