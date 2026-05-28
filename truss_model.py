@@ -1,4 +1,5 @@
 import math
+import json
 
 class Node:
     def __init__(self, x, y):
@@ -21,6 +22,26 @@ class Node:
         else:
             self.is_anchor_x = False
             self.is_anchor_y = False
+
+    def to_dict(self):
+        return {
+            "x": self.x,
+            "y": self.y,
+            "is_anchor_x": self.is_anchor_x,
+            "is_anchor_y": self.is_anchor_y,
+            "load_x": self.load_x,
+            "load_y": self.load_y
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        node = cls(data["x"], data["y"])
+        node.is_anchor_x = data.get("is_anchor_x", False)
+        node.is_anchor_y = data.get("is_anchor_y", False)
+        node.load_x = data.get("load_x", 0.0)
+        node.load_y = data.get("load_y", 0.0)
+        return node
+
 
 class Beam:
     def __init__(self, node_a_index, node_b_index, material_name="Steel"):
@@ -86,6 +107,26 @@ class Beam:
             self.area = math.pi * (r * r)
             self.inertia = (math.pi * (r * r * r * r)) / 4.0
 
+    def to_dict(self):
+        return {
+            "node_a": self.node_a,
+            "node_b": self.node_b,
+            "material": self.material,
+            "profile": self.profile,
+            "dim_w": self.dim_w,
+            "dim_t": self.dim_t
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        beam = cls(data["node_a"], data["node_b"], data.get("material", "Steel"))
+        beam.profile = data.get("profile", "Square Tube")
+        beam.dim_w = data.get("dim_w", 0.05)
+        beam.dim_t = data.get("dim_t", 0.005)
+        beam.recalculate_geometry()
+        return beam
+
+
 class TrussSystem:
     def __init__(self):
         self.nodes = []
@@ -128,6 +169,36 @@ class TrussSystem:
         node_b = self.nodes[beam.node_b]
         pixel_dist = math.hypot(node_b.x - node_a.x, node_b.y - node_a.y)
         return pixel_dist / self.PIXELS_PER_METER
+
+    def save_to_file(self, filename="project.json"):
+        project_data = {
+            "version": "1.0",
+            "self_weight_enabled": self.self_weight_enabled,
+            "active_material": self.active_material,
+            "nodes": [node.to_dict() for node in self.nodes],
+            "beams": [beam.to_dict() for beam in self.beams]
+        }
+        with open(filename, "w") as f:
+            json.dump(project_data, f, indent=4)
+
+    def load_from_file(self, filename="project.json"):
+        try:
+            with open(filename, "r") as f:
+                project_data = json.load(f)
+            
+            self.clear()
+            self.self_weight_enabled = project_data.get("self_weight_enabled", True)
+            self.active_material = project_data.get("active_material", "Steel")
+            
+            for node_data in project_data.get("nodes", []):
+                self.nodes.append(Node.from_dict(node_data))
+                
+            for beam_data in project_data.get("beams", []):
+                self.beams.append(Beam.from_dict(beam_data))
+                
+            return True
+        except (FileNotFoundError, json.JSONDecodeError, KeyError):
+            return False
 
     def load_benchmark_case(self):
         self.clear()

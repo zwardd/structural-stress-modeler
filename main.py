@@ -1,8 +1,13 @@
 import pygame
 import sys
 import math
+import tkinter as tk
+from tkinter import filedialog
 from truss_model import TrussSystem
 from matrix_solver import solve_truss, calculate_benchmark_metrics
+
+root = tk.Tk()
+root.withdraw()
 
 pygame.init()
 
@@ -61,10 +66,18 @@ last_gravity_multiplier = 0.0
 first_break_gravity = None  
 show_benchmark_hud = False
 
+status_banner_text = ""
+status_banner_timer = 0
+
 input_buffer = ""
 input_active = False
 input_type = "Y"
 fading_beams = []  
+
+def trigger_status(text):
+    global status_banner_text, status_banner_timer
+    status_banner_text = text
+    status_banner_timer = 180
 
 def calculate_utilization(beam):
     if beam.is_broken or beam.force == 0.0:
@@ -211,6 +224,28 @@ while is_running:
                 elif event.unicode in "0123456789.-": input_buffer += event.unicode
                 continue
 
+            # Check for file shortcuts (Ctrl+S and Ctrl+O)
+            ctrl_pressed = pygame.key.get_pressed()[pygame.K_LCTRL] or pygame.key.get_pressed()[pygame.K_RCTRL]
+            if ctrl_pressed and not is_playing:
+                if event.key == pygame.K_s:
+                    file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json")])
+                    if file_path:
+                        truss.save_to_file(file_path)
+                        trigger_status("PROJECT SAVED SUCCESSFULLY")
+                    continue
+                elif event.key == pygame.K_o:
+                    file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
+                    if file_path:
+                        if truss.load_from_file(file_path):
+                            selected_node_idx, selected_beam_idx, active_node_bnd = None, None, None
+                            gravity_multiplier, first_break_gravity = 0.0, None
+                            fading_beams.clear()
+                            show_benchmark_hud = False
+                            trigger_status("PROJECT LOADED")
+                        else:
+                            trigger_status("FAILED TO LOAD FILE")
+                    continue
+
             if event.key == pygame.K_SPACE:
                 is_playing = not is_playing
                 active_node_bnd = None
@@ -229,7 +264,7 @@ while is_running:
                     input_active, show_benchmark_hud = False, False
                 elif event.key == pygame.K_g: grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d: show_deformed = not show_deformed
-                elif event.key == pygame.K_w and not pygame.key.get_pressed()[pygame.K_LCTRL]:
+                elif event.key == pygame.K_w:
                     truss.self_weight_enabled = not truss.self_weight_enabled
                 elif event.key == pygame.K_v:
                     show_benchmark_hud = not show_benchmark_hud
@@ -632,10 +667,18 @@ while is_running:
 
         screen.blit(hud_surface, (hud_x, sim_rect.top + 15))
 
+    if status_banner_timer > 0:
+        status_banner_timer -= 1
+        sw, sh = font_header.size(status_banner_text)[0] + 30, 35
+        sb_rect = pygame.Rect(sim_rect.left + (sim_rect.width - sw) // 2, sim_rect.bottom - 50, sw, sh)
+        pygame.draw.rect(screen, (24, 24, 27, 230), sb_rect, border_radius=4)
+        pygame.draw.rect(screen, COLOR_PLAY_GREEN if "SUCCESS" in status_banner_text or "LOADED" in status_banner_text else COLOR_LOAD, sb_rect, width=1, border_radius=4)
+        screen.blit(font_header.render(status_banner_text, True, COLOR_TEXT_MAIN), (sb_rect.x + 15, sb_rect.y + 9))
+
     grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
-    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
+    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
     screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
