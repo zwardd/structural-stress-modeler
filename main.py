@@ -77,6 +77,31 @@ input_active = False
 input_type = "Y"
 fading_beams = []  
 
+pan_x = 0.0
+pan_y = 0.0
+zoom_scale = 1.0
+MIN_ZOOM = 0.3
+MAX_ZOOM = 4.0
+is_panning = False
+last_mouse_pos = (0, 0)
+WORKSPACE_LIMIT = 50000.0
+
+sim_rect = pygame.Rect(160, 20, 960, 660)
+
+def to_screen(sim_x, sim_y):
+    cx = sim_rect.left + sim_rect.width / 2
+    cy = sim_rect.top + sim_rect.height / 2
+    screen_x = (sim_x - cx) * zoom_scale + cx + pan_x
+    screen_y = (sim_y - cy) * zoom_scale + cy + pan_y
+    return screen_x, screen_y
+
+def to_sim(screen_x, screen_y):
+    cx = sim_rect.left + sim_rect.width / 2
+    cy = sim_rect.top + sim_rect.height / 2
+    sim_x = (screen_x - pan_x - cx) / zoom_scale + cx
+    sim_y = (screen_y - pan_y - cy) / zoom_scale + cy
+    return sim_x, sim_y
+
 def trigger_status(text):
     global status_banner_text, status_banner_timer
     status_banner_text = text
@@ -184,11 +209,11 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
     if mag < 1e-1: return
     dx = fx / mag
     dy = fy / mag
-    arrow_len = max(20, min(65, int(mag / 1000.0) * 1.5 + 20))
+    arrow_len = max(20, min(65, int(mag / 1000.0) * 1.5 + 20)) * zoom_scale
     start_x = cx - dx * arrow_len
     start_y = cy - dy * arrow_len
-    pygame.draw.line(surface, color, (start_x, start_y), (cx, cy), 3)
-    wing_len = 8
+    pygame.draw.line(surface, color, (start_x, start_y), (cx, cy), max(1, int(3 * zoom_scale)))
+    wing_len = max(3, int(8 * zoom_scale))
     angle = math.atan2(cy - start_y, cx - start_x)
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
@@ -253,14 +278,14 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
     nx = -dy / L_pixels
     ny = dx / L_pixels
     util = abs(beam.stress) / MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])["yield"]
-    max_bow = min(35.0, (util - 0.95) * 18.0)
+    max_bow = min(35.0, (util - 0.95) * 18.0) * zoom_scale
     if max_bow < 1.0:
         max_bow = 1.0
     if beam.stress > 0.0:
         max_bow *= 0.15
     limit, proxy_node = find_proxy_limit(beam)
-    if proxy_node is not None and max_bow >= limit:
-        max_bow = limit
+    if proxy_node is not None and max_bow >= (limit * zoom_scale):
+        max_bow = limit * zoom_scale
     segments = 16
     points = []
     for s in range(segments + 1):
@@ -278,7 +303,6 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
 is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
-    sim_rect = pygame.Rect(160, 20, 960, 660)
     btn_select    = pygame.Rect(15, 80, 110, 35)
     btn_node      = pygame.Rect(15, 125, 110, 35)
     btn_beam      = pygame.Rect(15, 170, 110, 35)
@@ -289,9 +313,22 @@ while is_running:
     btn_optimize  = pygame.Rect(15, 525, 110, 35)
     chk_profile   = pygame.Rect(15, 570, 14, 14)
 
+    mouse_pos = pygame.mouse.get_pos()
+
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
             is_running = False
+            
+        elif event.type == pygame.MOUSEWHEEL:
+            if sim_rect.collidepoint(mouse_pos):
+                old_sim_x, old_sim_y = to_sim(mouse_pos[0], mouse_pos[1])
+                zoom_scale = max(MIN_ZOOM, min(MAX_ZOOM, zoom_scale + event.y * 0.08))
+                new_screen_x, new_screen_y = to_screen(old_sim_x, old_sim_y)
+                pan_x += mouse_pos[0] - new_screen_x
+                pan_y += mouse_pos[1] - new_screen_y
+                pan_x = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, pan_x))
+                pan_y = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, pan_y))
+
         elif event.type == pygame.KEYDOWN:
             if input_active:
                 if event.key == pygame.K_RETURN:
@@ -325,17 +362,21 @@ while is_running:
                             fading_beams.clear()
                             show_benchmark_hud = False
                             is_optimizing = False
+                            pan_x, pan_y, zoom_scale = 0.0, 0.0, 1.0
                             trigger_status("PROJECT LOADED")
                         else:
                             trigger_status("FAILED TO LOAD FILE")
                     continue
 
-            if event.key == pygame.K_SPACE:
+            if event.key == pygame.K_SPACE and not pygame.key.get_pressed()[pygame.K_LALT]:
                 is_playing = not is_playing
                 is_optimizing = False
                 active_node_bnd = None
                 input_active = False
-            if event.key == pygame.K_EQUALS:
+            elif event.key == pygame.K_h:
+                pan_x, pan_y, zoom_scale = 0.0, 0.0, 1.0
+                trigger_status("CAMERA RESET TO ORIGIN")
+            elif event.key == pygame.K_EQUALS:
                 if first_break_gravity is not None: gravity_multiplier = min(first_break_gravity, gravity_multiplier + 0.5)
                 else: gravity_multiplier = min(100.0, gravity_multiplier + 0.5)
             elif event.key == pygame.K_MINUS: gravity_multiplier = max(0.0, gravity_multiplier - 0.5)
@@ -347,6 +388,7 @@ while is_running:
                     gravity_multiplier, first_break_gravity = 0.0, None
                     fading_beams.clear()
                     input_active, show_benchmark_hud, is_optimizing = False, False, False
+                    pan_x, pan_y, zoom_scale = 0.0, 0.0, 1.0
                 elif event.key == pygame.K_g: grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d: show_deformed = not show_deformed
                 elif event.key == pygame.K_w:
@@ -357,6 +399,7 @@ while is_running:
                         truss.load_benchmark_case()
                         selected_node_idx, selected_beam_idx, active_node_bnd, first_break_gravity = None, None, None, None
                         is_optimizing = False
+                        pan_x, pan_y, zoom_scale = 0.0, 0.0, 1.0
                 elif event.key == pygame.K_1: truss.set_material("Steel")
                 elif event.key == pygame.K_2: truss.set_material("Aluminum")
                 elif event.key == pygame.K_3: truss.set_material("Titanium")
@@ -390,40 +433,45 @@ while is_running:
                         selected_node_idx, first_break_gravity = None, None
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
-            mouse_pos = event.pos
-            if sidebar_rect.collidepoint(mouse_pos):
-                if btn_play.collidepoint(mouse_pos):
+            if sidebar_rect.collidepoint(event.pos):
+                if btn_play.collidepoint(event.pos):
                     is_playing = not is_playing
                     is_optimizing = False
                     input_active = False
-                elif btn_w_toggle.collidepoint(mouse_pos):
+                elif btn_w_toggle.collidepoint(event.pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
-                elif btn_optimize.collidepoint(mouse_pos) and not is_playing:
+                elif btn_optimize.collidepoint(event.pos) and not is_playing:
                     is_optimizing = not is_optimizing
-                    if is_optimizing:
-                        trigger_status("OPTIMIZATION ENGINE ACTIVE")
-                    else:
-                        trigger_status("OPTIMIZATION HALTED")
-                elif chk_profile.inflate(10, 10).collidepoint(mouse_pos):
+                    if is_optimizing: trigger_status("OPTIMIZATION ENGINE ACTIVE")
+                    else: trigger_status("OPTIMIZATION HALTED")
+                elif chk_profile.inflate(10, 10).collidepoint(event.pos):
                     allow_profile_switching = not allow_profile_switching
-                elif btn_select.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "SELECT", False
-                elif btn_node.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "NODE", False
-                elif btn_beam.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "BEAM", False
-                elif btn_load.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "LOAD", False
-                elif btn_benchmark.collidepoint(mouse_pos) and not is_playing:
+                elif btn_select.collidepoint(event.pos) and not is_playing: current_mode, input_active = "SELECT", False
+                elif btn_node.collidepoint(event.pos) and not is_playing: current_mode, input_active = "NODE", False
+                elif btn_beam.collidepoint(event.pos) and not is_playing: current_mode, input_active = "BEAM", False
+                elif btn_load.collidepoint(event.pos) and not is_playing: current_mode, input_active = "LOAD", False
+                elif btn_benchmark.collidepoint(event.pos) and not is_playing:
                     show_benchmark_hud = not show_benchmark_hud
                     if show_benchmark_hud:
                         truss.load_benchmark_case()
                         selected_node_idx, selected_beam_idx, active_node_bnd, first_break_gravity = None, None, None, None
                         is_optimizing = False
+                        pan_x, pan_y, zoom_scale = 0.0, 0.0, 1.0
                 continue
 
             if input_active: input_active, input_buffer = False, ""
-            if not sim_rect.collidepoint(mouse_pos) or is_playing: continue
+            if not sim_rect.collidepoint(event.pos): continue
+
+            if event.button == 2 or (event.button == 1 and pygame.key.get_pressed()[pygame.K_LSHIFT]):
+                is_panning = True
+                last_mouse_pos = event.pos
+                continue
+
+            sim_mouse_x, sim_mouse_y = to_sim(event.pos[0], event.pos[1])
 
             clicked_node_idx = None
             for i, node in enumerate(truss.nodes):
-                if pygame.math.Vector2(node.x, node.y).distance_to(mouse_pos) < CLICK_TOLERANCE:
+                if math.hypot(node.x - sim_mouse_x, node.y - sim_mouse_y) < (CLICK_TOLERANCE / zoom_scale):
                     clicked_node_idx = i
                     break
 
@@ -435,10 +483,12 @@ while is_running:
                     if clicked_node_idx is None:
                         for i, b in enumerate(truss.beams):
                             if b.status == "FRACTURED": continue
-                            if point_to_line_distance(mouse_pos[0], mouse_pos[1], truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < 8:
+                            if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < (8 / zoom_scale):
                                 selected_beam_idx = i
                 elif current_mode == "NODE" and clicked_node_idx is None:
-                    truss.add_node(mouse_pos[0], mouse_pos[1], snap_enabled=grid_enabled, grid_size=GRID_SIZE)
+                    sim_mouse_x = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, sim_mouse_x))
+                    sim_mouse_y = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, sim_mouse_y))
+                    truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=grid_enabled, grid_size=GRID_SIZE)
                     first_break_gravity, show_benchmark_hud = None, False
                 elif current_mode == "BEAM":
                     if clicked_node_idx is not None:
@@ -450,6 +500,17 @@ while is_running:
             elif event.button == 3 and clicked_node_idx is not None:
                 truss.nodes[clicked_node_idx].toggle_support()
                 first_break_gravity, show_benchmark_hud = None, False
+
+        elif event.type == pygame.MOUSEBUTTONUP:
+            if event.button == 2 or event.button == 1:
+                is_panning = False
+
+    if is_panning:
+        pan_x += mouse_pos[0] - last_mouse_pos[0]
+        pan_y += mouse_pos[1] - last_mouse_pos[1]
+        pan_x = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, pan_x))
+        pan_y = max(-WORKSPACE_LIMIT, min(WORKSPACE_LIMIT, pan_y))
+        last_mouse_pos = mouse_pos
 
     if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not input_active:
         keys = pygame.key.get_pressed()
@@ -585,11 +646,33 @@ while is_running:
         pygame.draw.rect(screen, COLOR_PLAY_GREEN, chk_profile.inflate(-4, -4), border_radius=1)
     screen.blit(font_body.render("Swap Profile", True, COLOR_TEXT_MAIN if allow_profile_switching else COLOR_TEXT_MUTED), (chk_profile.x + 20, chk_profile.y - 1))
 
-    pygame.draw.rect(screen, COLOR_SIM_ZONE, sim_rect, border_radius=8)
+    sim_zone_surface = pygame.Surface((sim_rect.width, sim_rect.height))
+    sim_zone_surface.fill(COLOR_SIM_ZONE)
+
     if grid_enabled:
-        for x in range(sim_rect.left, sim_rect.right, GRID_SIZE): pygame.draw.line(screen, COLOR_GRID, (x, sim_rect.top), (x, sim_rect.bottom))
-        for y in range(sim_rect.top, sim_rect.bottom, GRID_SIZE): pygame.draw.line(screen, COLOR_GRID, (sim_rect.left, y), (sim_rect.right, y))
-    pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
+        scaled_grid = GRID_SIZE * zoom_scale
+        if scaled_grid > 2:
+            start_sim_x, start_sim_y = to_sim(sim_rect.left, sim_rect.top)
+            start_g_x = (math.ceil(start_sim_x / GRID_SIZE) * GRID_SIZE)
+            start_g_y = (math.ceil(start_sim_y / GRID_SIZE) * GRID_SIZE)
+            
+            end_sim_x, end_sim_y = to_sim(sim_rect.right, sim_rect.bottom)
+            
+            curr_g_x = start_g_x
+            while curr_g_x <= end_sim_x:
+                screen_x, _ = to_screen(curr_g_x, 0)
+                local_x = screen_x - sim_rect.left
+                if 0 <= local_x <= sim_rect.width:
+                    pygame.draw.line(sim_zone_surface, COLOR_GRID, (local_x, 0), (local_x, sim_rect.height))
+                curr_g_x += GRID_SIZE
+                
+            curr_g_y = start_g_y
+            while curr_g_y <= end_sim_y:
+                _, screen_y = to_screen(0, curr_g_y)
+                local_y = screen_y - sim_rect.top
+                if 0 <= local_y <= sim_rect.height:
+                    pygame.draw.line(sim_zone_surface, COLOR_GRID, (0, local_y), (sim_rect.width, local_y))
+                curr_g_y += GRID_SIZE
 
     node_has_connections = [False] * len(truss.nodes)
     for beam in truss.beams:
@@ -601,22 +684,38 @@ while is_running:
         if beam.status == "FRACTURED": continue
         ax, ay = get_def_pos(beam.node_a, truss.nodes[beam.node_a])
         bx, by = get_def_pos(beam.node_b, truss.nodes[beam.node_b])
-        if show_deformed and truss.displacements is None and truss.is_stable and is_playing:
-            pygame.draw.line(screen, (45, 45, 50), (truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y), (truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y), 1)
         
-        thickness_pixels = max(2, min(16, int(beam.dim_w * 140.0)))
-        draw_curved_beam(screen, ax, ay, bx, by, beam, thickness_pixels, get_stress_color(beam), i == selected_beam_idx)
+        screen_ax, screen_ay = to_screen(ax, ay)
+        screen_bx, screen_by = to_screen(bx, by)
+        
+        local_ax, local_ay = screen_ax - sim_rect.left, screen_ay - sim_rect.top
+        local_bx, local_by = screen_bx - sim_rect.left, screen_by - sim_rect.top
+        
+        if show_deformed and truss.displacements is None and truss.is_stable and is_playing:
+            raw_ax, raw_ay = to_screen(truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y)
+            raw_bx, raw_by = to_screen(truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y)
+            pygame.draw.line(sim_zone_surface, (45, 45, 50), (raw_ax - sim_rect.left, raw_ay - sim_rect.top), (raw_bx - sim_rect.left, raw_by - sim_rect.top), 1)
+        
+        thickness_pixels = max(1, int(max(2, min(16, int(beam.dim_w * 140.0))) * zoom_scale))
+        draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, get_stress_color(beam), i == selected_beam_idx)
 
     for fb in fading_beams:
         alpha = int(fb[5] * 255)
         if alpha <= 0: continue
-        surf = pygame.Surface((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.SRCALPHA)
-        pygame.draw.line(surf, (220, 38, 38, alpha), (fb[0], fb[1]), (fb[2], fb[3]), fb[4])
-        screen.blit(surf, (0,0))
+        
+        rax, ray = to_screen(fb[0], fb[1])
+        rbx, rby = to_screen(fb[2], fb[3])
+        
+        surf = pygame.Surface((sim_rect.width, sim_rect.height), pygame.SRCALPHA)
+        pygame.draw.line(surf, (220, 38, 38, alpha), (rax - sim_rect.left, ray - sim_rect.top), (rbx - sim_rect.left, rby - sim_rect.top), max(1, int(fb[4] * zoom_scale)))
+        sim_zone_surface.blit(surf, (0, 0))
 
     for i, node in enumerate(truss.nodes):
         if is_playing and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
         nx, ny = get_def_pos(i, node)
+        
+        screen_nx, screen_ny = to_screen(nx, ny)
+        local_nx, local_ny = screen_nx - sim_rect.left, screen_ny - sim_rect.top
         
         total_fx = node.load_x
         total_fy = node.load_y + (1000.0 * gravity_multiplier if is_playing else 0.0)
@@ -628,21 +727,26 @@ while is_running:
                 if beam.node_a == i or beam.node_b == i:
                     total_fy += (truss.get_beam_length(beam) * beam.area * beam.density * g) / 2.0
             
-        draw_force_vector(screen, nx, ny, total_fx, total_fy, COLOR_LOAD)
+        draw_force_vector(sim_zone_surface, local_nx, local_ny, total_fx, total_fy, COLOR_LOAD)
         if is_playing and (node.rx != 0.0 or node.ry != 0.0):
-            draw_force_vector(screen, nx, ny, node.rx, node.ry, COLOR_REACTION)
+            draw_force_vector(sim_zone_surface, local_nx, local_ny, node.rx, node.ry, COLOR_REACTION)
         
+        r_scale = max(2, int(NODE_RADIUS * zoom_scale))
         if i == selected_node_idx or i == active_node_bnd:
-            pygame.draw.circle(screen, COLOR_HIGHLIGHT, (nx, ny), NODE_RADIUS + 5, width=2)
+            pygame.draw.circle(sim_zone_surface, COLOR_HIGHLIGHT, (local_nx, local_ny), r_scale + max(2, int(5 * zoom_scale)), width=2)
         if node.is_anchor_x and node.is_anchor_y:
-            pygame.draw.circle(screen, COLOR_PIN, (nx, ny), NODE_RADIUS + 7, width=3)
-            pygame.draw.circle(screen, COLOR_PIN, (nx, ny), NODE_RADIUS + 2)
+            pygame.draw.circle(sim_zone_surface, COLOR_PIN, (local_nx, local_ny), r_scale + max(2, int(7 * zoom_scale)), width=3)
+            pygame.draw.circle(sim_zone_surface, COLOR_PIN, (local_nx, local_ny), r_scale + max(1, int(2 * zoom_scale)))
         elif node.is_anchor_y and not node.is_anchor_x:
-            pygame.draw.line(screen, COLOR_ROLLER, (nx - 12, ny + 11), (nx + 12, ny + 11), 2)
-            pygame.draw.line(screen, COLOR_ROLLER, (nx - 8, ny + 15), (nx + 8, ny + 15), 1)
-            pygame.draw.circle(screen, COLOR_ROLLER, (nx, ny), NODE_RADIUS + 2)
+            w_off, h_off = int(12 * zoom_scale), int(11 * zoom_scale)
+            pygame.draw.line(sim_zone_surface, COLOR_ROLLER, (local_nx - w_off, local_ny + h_off), (local_nx + w_off, local_ny + h_off), 2)
+            pygame.draw.line(sim_zone_surface, COLOR_ROLLER, (local_nx - int(8 * zoom_scale), local_ny + int(15 * zoom_scale)), (local_nx + int(8 * zoom_scale), local_ny + int(15 * zoom_scale)), 1)
+            pygame.draw.circle(sim_zone_surface, COLOR_ROLLER, (local_nx, local_ny), r_scale + max(1, int(2 * zoom_scale)))
         else:
-            pygame.draw.circle(screen, (234, 179, 8) if i == active_node_bnd else COLOR_NODE, (nx, ny), NODE_RADIUS)
+            pygame.draw.circle(sim_zone_surface, (234, 179, 8) if i == active_node_bnd else COLOR_NODE, (local_nx, local_ny), r_scale)
+
+    screen.blit(sim_zone_surface, (sim_rect.left, sim_rect.top))
+    pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
 
     if not truss.is_stable:
         txt = "STRUCTURE UNSTABLE / MECHANISM DETECTED"
@@ -801,7 +905,7 @@ while is_running:
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
     screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-    screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+    screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle | Scroll Wheel Zoom | Mid-Click Drag Pan | [H] Home Cam", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
     clock.tick(60)
