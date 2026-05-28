@@ -80,11 +80,48 @@ def trigger_status(text):
     status_banner_text = text
     status_banner_timer = 180  
 
+def find_proxy_limit(beam):
+    if beam.status != "YIELDING" or beam.force == 0.0:
+        return float('inf'), None
+    node_a = truss.nodes[beam.node_a]
+    node_b = truss.nodes[beam.node_b]
+    ax, ay = node_a.x, node_a.y
+    bx, by = node_b.x, node_b.y
+    dx, dy = bx - ax, by - ay
+    L_pixels = math.hypot(dx, dy)
+    if L_pixels < 1:
+        return float('inf'), None
+    nx, ny = -dy / L_pixels, dx / L_pixels
+    min_dist = float('inf')
+    target_node_idx = None
+    for i, node in enumerate(truss.nodes):
+        if i == beam.node_a or i == beam.node_b:
+            continue
+        px_pos, py_pos = node.x, node.y
+        proj_t = ((px_pos - ax) * dx + (py_pos - ay) * dy) / (L_pixels * L_pixels)
+        if 0.1 <= proj_t <= 0.9:
+            mid_x = ax + dx * proj_t
+            mid_y = ay + dy * proj_t
+            perp_dist = (px_pos - mid_x) * nx + (py_pos - mid_y) * ny
+            if abs(perp_dist) < 40.0 and abs(perp_dist) < abs(min_dist):
+                if (beam.stress < -1e-2 and perp_dist > 0.0) or (beam.stress > 1e-2):
+                    min_dist = perp_dist
+                    target_node_idx = i
+    if min_dist != float('inf'):
+        return abs(min_dist), target_node_idx
+    return float('inf'), None
+
 def calculate_utilization(beam):
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return 0.0
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
+    if beam.status == "YIELDING":
+        limit, proxy_node = find_proxy_limit(beam)
+        if proxy_node is not None:
+            current_visual_bow = min(35.0, (yield_util - 0.95) * 18.0)
+            if current_visual_bow >= limit:
+                return max(yield_util * 1.6, 1.2)
     if beam.stress < -1e-2:
         length_m = truss.get_beam_length(beam)
         if length_m > 0:
@@ -99,12 +136,16 @@ def get_stress_color(beam):
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return (180, 180, 185)
     if beam.status == "YIELDING":
+        limit, proxy_node = find_proxy_limit(beam)
+        if proxy_node is not None:
+            util = abs(beam.stress) / MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])["yield"]
+            if min(35.0, (util - 0.95) * 18.0) >= limit:
+                return (220, 38, 38)
         pulse = (math.sin(pygame.time.get_ticks() * 0.01) + 1.0) / 2.0
         return (int(249 - pulse * 15), int(115 + pulse * 25), int(22 - pulse * 10))
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
     is_compression = beam.stress < -1e-2
-    
     if is_compression:
         length_m = truss.get_beam_length(beam)
         buckle_util = 0.0
@@ -166,7 +207,6 @@ def draw_profile_preview(surf, x, y, width, height, beam):
     outer_dim = max(6, min(width - 12, int(beam.dim_w * scale)))
     color_fill = (55, 65, 81)
     color_line = COLOR_TEXT_MUTED
-    
     if beam.profile == "Square Tube":
         ox, oy = center_x - outer_dim // 2, center_y - outer_dim // 2
         pygame.draw.rect(surf, color_fill, (ox, oy, outer_dim, outer_dim))
@@ -203,24 +243,22 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
             pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
         pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
         return
-
     dx = bx - ax
     dy = by - ay
     L_pixels = math.hypot(dx, dy)
     if L_pixels < 1:
         return
-
     nx = -dy / L_pixels
     ny = dx / L_pixels
-
-    util = calculate_utilization(beam)
+    util = abs(beam.stress) / MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])["yield"]
     max_bow = min(35.0, (util - 0.95) * 18.0)
     if max_bow < 1.0:
         max_bow = 1.0
-
     if beam.stress > 0.0:
         max_bow *= 0.15
-
+    limit, proxy_node = find_proxy_limit(beam)
+    if proxy_node is not None and max_bow >= limit:
+        max_bow = limit
     segments = 16
     points = []
     for s in range(segments + 1):
@@ -231,7 +269,6 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
         x_curve = x_line + nx * offset
         y_curve = y_line + ny * offset
         points.append((x_curve, y_curve))
-
     if is_selected:
         pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, points, thickness + 4)
     pygame.draw.lines(surface, color, False, points, thickness)
@@ -410,33 +447,26 @@ while is_running:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
         if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
             gravity_multiplier = first_break_gravity
-
         for b in truss.beams:
             if b.status != "NORMAL" and b.broken_at_gravity is not None:
                 if gravity_multiplier < b.broken_at_gravity:
                     b.reset_status()
-        
         if not any(b.status == "FRACTURED" for b in truss.beams): first_break_gravity = None
-
         solve_truss(truss, gravity_multiplier)
-
         if truss.is_stable:
             for b in truss.beams:
                 if b.status == "FRACTURED": continue
                 specs = MATERIAL_SPECS.get(b.material, MATERIAL_SPECS["Steel"])
                 utilization = calculate_utilization(b)
-                
-                if abs(b.stress) >= specs["ultimate"]:
+                if abs(b.stress) >= specs["ultimate"] or utilization >= 1.6:
                     b.status = "FRACTURED"
                     b.is_broken = True
                     b.broken_at_gravity = gravity_multiplier
                     if first_break_gravity is None: first_break_gravity = gravity_multiplier
-                    
                     ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
                     bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
                     mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
                     thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
-                    
                     fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
                     fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
                     break 
