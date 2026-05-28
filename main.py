@@ -502,6 +502,8 @@ while is_running:
                 if not changed:
                     is_optimizing = False
                     trigger_status("OPTIMIZATION COMPLETE (FOS > 2.0 ACHIEVED)")
+                else:
+                    pygame.time.delay(90)
         else:
             for b in truss.beams:
                 b.reset_status()
