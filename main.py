@@ -728,8 +728,28 @@ while is_running:
                     total_fy += (truss.get_beam_length(beam) * beam.area * beam.density * g) / 2.0
             
         draw_force_vector(sim_zone_surface, local_nx, local_ny, total_fx, total_fy, COLOR_LOAD)
-        if is_playing and (node.rx != 0.0 or node.ry != 0.0):
-            draw_force_vector(sim_zone_surface, local_nx, local_ny, node.rx, node.ry, COLOR_REACTION)
+        if is_playing and (abs(node.rx) > 0.1 or abs(node.ry) > 0.1):
+            net_r = math.hypot(node.rx, node.ry)
+            dx = node.rx / net_r
+            dy = -node.ry / net_r
+            
+            base_offset = 15 * zoom_scale
+            arrow_len = 35 * zoom_scale
+            
+            start_x = local_nx + dx * base_offset
+            start_y = local_ny + dy * base_offset
+            end_x = start_x + dx * arrow_len
+            y_end = start_y + dy * arrow_len
+            
+            pygame.draw.line(sim_zone_surface, COLOR_REACTION, (start_x, start_y), (end_x, y_end), 2)
+            
+            angle = math.atan2(y_end - start_y, end_x - start_x)
+            wing_len = 8
+            pygame.draw.polygon(sim_zone_surface, COLOR_REACTION, [
+                (start_x, start_y),
+                (start_x + wing_len * math.cos(angle + 0.4), start_y + wing_len * math.sin(angle + 0.4)),
+                (start_x + wing_len * math.cos(angle - 0.4), start_y + wing_len * math.sin(angle - 0.4))
+            ])
         
         r_scale = max(2, int(NODE_RADIUS * zoom_scale))
         if i == selected_node_idx or i == active_node_bnd:
