@@ -42,71 +42,65 @@ class Node:
         node.load_y = data.get("load_y", 0.0)
         return node
 
-
 class Beam:
-    def __init__(self, node_a_index, node_b_index, material_name="Steel"):
-        self.node_a = node_a_index
-        self.node_b = node_b_index
-        self.material = material_name
+    def __init__(self, node_a, node_b, material="Steel"):
+        self.node_a = node_a
+        self.node_b = node_b
+        self.material = material
         self.profile = "Square Tube"
         self.dim_w = 0.05
-        self.dim_t = 0.005
-        self.area = 0.0
-        self.inertia = 0.0
-        self.modulus = 200e9
-        self.density = 7850.0
-        self.stress = 0.0
+        self.dim_t = 0.004
         self.force = 0.0
+        self.stress = 0.0
         self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
-        
-        self.update_material_properties(material_name)
-        self.recalculate_geometry()
+        self.update_material_properties(material)
 
-    def update_material_properties(self, material_name):
-        self.material = material_name
-        if material_name == "Aluminum":
-            self.modulus = 70e9
-            self.density = 2700.0
-        elif material_name == "Titanium":
-            self.modulus = 114e9
-            self.density = 4430.0
-        else:
+    def update_material_properties(self, material):
+        self.material = material
+        if material == "Steel":
             self.modulus = 200e9
-            self.density = 7850.0
-
-    def adjust_dimension(self, delta):
-        self.dim_w = max(0.01, min(0.3, self.dim_w + delta))
-        if self.profile == "Square Tube" or self.profile == "H-Beam":
-            self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t + delta * 0.1))
-        self.recalculate_geometry()
-
-    def cycle_profile(self):
-        profiles = ["Square Tube", "H-Beam", "Solid Bar"]
-        idx = (profiles.index(self.profile) + 1) % len(profiles)
-        self.profile = profiles[idx]
+            self.density = 7850
+        elif material == "Aluminum":
+            self.modulus = 70e9
+            self.density = 2700
+        elif material == "Titanium":
+            self.modulus = 115e9
+            self.density = 4430
         self.recalculate_geometry()
 
     def recalculate_geometry(self):
         w = self.dim_w
         t = self.dim_t
         if self.profile == "Square Tube":
-            self.area = (w * w) - ((w - 2 * t) * (w - 2 * t))
-            self.inertia = ((w * w * w * w) - ((w - 2 * t) * (w - 2 * t) * (w - 2 * t) * (w - 2 * t))) / 12.0
+            self.area = w**2 - (w - 2*t)**2
+            self.inertia = (w**4 - (w - 2*t)**4) / 12.0
         elif self.profile == "H-Beam":
-            h = w
-            b = w
-            tw = t
-            tf = t
-            self.area = 2 * (b * tf) + (h - 2 * tf) * tw
-            I_xx = ((b * (h * h * h)) - ((b - tw) * ((h - 2 * tf) * (h - 2 * tf) * (h - 2 * tf)))) / 12.0
-            I_yy = (2 * tf * (b * b * b) + (h - 2 * tf) * (tw * tw * tw)) / 12.0
-            self.inertia = min(I_xx, I_yy)
+            self.area = (w * t * 2) + ((w - 2*t) * t)
+            self.inertia = ((w * w**3) - ((w - t) * (w - 2*t)**3)) / 12.0
+        elif self.profile == "Solid Bar":
+            radius = w / 2.0
+            self.area = math.pi * radius**2
+            self.inertia = (math.pi * radius**4) / 4.0
+
+    def cycle_profile(self):
+        profiles = ["Square Tube", "H-Beam", "Solid Bar"]
+        self.profile = profiles[(profiles.index(self.profile) + 1) % len(profiles)]
+        self.recalculate_geometry()
+
+    def adjust_dimension(self, delta):
+        if self.profile == "Solid Bar":
+            self.dim_w = max(0.01, min(0.32, self.dim_w + delta))
         else:
-            r = w / 2.0
-            self.area = math.pi * (r * r)
-            self.inertia = (math.pi * (r * r * r * r)) / 4.0
+            new_w = max(0.01, min(0.32, self.dim_w + delta))
+            if delta > 0:
+                self.dim_w = new_w
+                self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t + (delta * 0.15)))
+            else:
+                self.dim_w = new_w
+                self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t))
+        self.recalculate_geometry()
 
     def reset_status(self):
         self.status = "NORMAL"
@@ -128,66 +122,69 @@ class Beam:
         beam = cls(data["node_a"], data["node_b"], data.get("material", "Steel"))
         beam.profile = data.get("profile", "Square Tube")
         beam.dim_w = data.get("dim_w", 0.05)
-        beam.dim_t = data.get("dim_t", 0.005)
+        beam.dim_t = data.get("dim_t", 0.004)
         beam.recalculate_geometry()
         return beam
-
 
 class TrussSystem:
     def __init__(self):
         self.nodes = []
         self.beams = []
-        self.active_material = "Steel"
         self.displacements = None
         self.is_stable = True
-        self.PIXELS_PER_METER = 80.0
+        self.active_material = "Steel"
         self.self_weight_enabled = True
 
-    def set_material(self, material_name):
-        if material_name in ["Steel", "Aluminum", "Titanium"]:
-            self.active_material = material_name
+    def clear(self):
+        self.nodes.clear()
+        self.beams.clear()
+        self.displacements = None
+        self.is_stable = True
 
-    def add_node(self, x, y, snap_enabled=False, grid_size=20):
+    def set_material(self, material):
+        if material in ["Steel", "Aluminum", "Titanium"]:
+            self.active_material = material
+            for beam in self.beams:
+                beam.update_material_properties(material)
+                beam.reset_status()
+
+    def add_node(self, x, y, snap_enabled=True, grid_size=20):
         if snap_enabled:
-            x = round((x - 160) / grid_size) * grid_size + 160
-            y = round((y - 20) / grid_size) * grid_size + 20
-
+            x = round(x / grid_size) * grid_size
+            y = round(y / grid_size) * grid_size
         for node in self.nodes:
-            if math.hypot(node.x - x, node.y - y) < 10:
-                return None
-        new_node = Node(x, y)
-        self.nodes.append(new_node)
-        return len(self.nodes) - 1
+            if math.isclose(node.x, x, abs_tol=1e-3) and math.isclose(node.y, y, abs_tol=1e-3):
+                return
+        self.nodes.append(Node(x, y))
 
-    def add_beam(self, index_a, index_b):
-        if index_a == index_b:
-            return None
+    def add_beam(self, node_a, node_b):
+        if node_a == node_b:
+            return
         for beam in self.beams:
-            if (beam.node_a == index_a and beam.node_b == index_b) or \
-               (beam.node_a == index_b and beam.node_b == index_a):
-                return None
-        new_beam = Beam(index_a, index_b, self.active_material)
-        self.beams.append(new_beam)
-        return len(self.beams) - 1
+            if (beam.node_a == node_a and beam.node_b == node_b) or (beam.node_a == node_b and beam.node_b == node_a):
+                return
+        self.beams.append(Beam(node_a, node_b, self.active_material))
 
     def get_beam_length(self, beam):
-        node_a = self.nodes[beam.node_a]
-        node_b = self.nodes[beam.node_b]
-        pixel_dist = math.hypot(node_b.x - node_a.x, node_b.y - node_a.y)
-        return pixel_dist / self.PIXELS_PER_METER
+        na = self.nodes[beam.node_a]
+        nb = self.nodes[beam.node_b]
+        return math.hypot(nb.x - na.x, nb.y - na.y) * 0.0125
 
-    def save_to_file(self, filename="project.json"):
+    def save_to_file(self, filename):
         project_data = {
-            "version": "1.0",
             "self_weight_enabled": self.self_weight_enabled,
             "active_material": self.active_material,
-            "nodes": [node.to_dict() for node in self.nodes],
-            "beams": [beam.to_dict() for beam in self.beams]
+            "nodes": [n.to_dict() for n in self.nodes],
+            "beams": [b.to_dict() for b in self.beams]
         }
-        with open(filename, "w") as f:
-            json.dump(project_data, f, indent=4)
+        try:
+            with open(filename, "w") as f:
+                json.dump(project_data, f, indent=4)
+            return True
+        except IOError:
+            return False
 
-    def load_from_file(self, filename="project.json"):
+    def load_from_file(self, filename):
         try:
             with open(filename, "r") as f:
                 project_data = json.load(f)
@@ -218,14 +215,82 @@ class TrussSystem:
         self.add_beam(1, 2)
         self.add_beam(0, 2)
         for beam in self.beams:
-            beam.dim_w = 0.05
-            beam.dim_t = 0.005
-            beam.profile = "Square Tube"
             beam.update_material_properties("Steel")
+            beam.profile = "Square Tube"
+            beam.dim_w = 0.05
+            beam.dim_t = 0.004
             beam.recalculate_geometry()
 
-    def clear(self):
-        self.nodes.clear()
-        self.beams.clear()
-        self.displacements = None
-        self.is_stable = True
+    def optimize_step(self, calculate_utilization_fn, solve_truss_fn, gravity_multiplier, allow_profile_switching):
+        solve_truss_fn(self, gravity_multiplier)
+        if not self.is_stable or len(self.beams) == 0:
+            return False
+        TARGET_UTIL = 0.50
+        TOLERANCE = 0.05
+        MIN_UTIL = TARGET_UTIL - TOLERANCE
+        step_changed = False
+        for beam in self.beams:
+            if beam.status == "FRACTURED":
+                continue
+            util = calculate_utilization_fn(beam)
+            if util == 0.0:
+                continue
+            
+            if allow_profile_switching:
+                best_profile = beam.profile
+                min_area = float('inf')
+                saved_w = beam.dim_w
+                saved_t = beam.dim_t
+                saved_profile = beam.profile
+                
+                for p_type in ["Square Tube", "H-Beam", "Solid Bar"]:
+                    beam.profile = p_type
+                    beam.dim_w = saved_w
+                    beam.dim_t = saved_t
+                    beam.recalculate_geometry()
+                    
+                    p_util = calculate_utilization_fn(beam)
+                    if p_util == 0.0:
+                        continue
+                    
+                    if p_util > TARGET_UTIL:
+                        delta = max(0.001, min(0.015, (p_util - TARGET_UTIL) * 0.02))
+                        test_w = min(0.3, beam.dim_w + delta)
+                    elif p_util < MIN_UTIL:
+                        delta = max(0.0005, min(0.008, (MIN_UTIL - p_util) * 0.01))
+                        test_w = max(0.01, beam.dim_w - delta)
+                    else:
+                        test_w = beam.dim_w
+                        
+                    beam.dim_w = test_w
+                    if beam.profile in ["Square Tube", "H-Beam"]:
+                        beam.dim_t = max(0.002, min(beam.dim_w * 0.4, beam.dim_w * 0.1))
+                    beam.recalculate_geometry()
+                    
+                    if beam.area < min_area:
+                        min_area = beam.area
+                        best_profile = p_type
+                        
+                beam.profile = saved_profile
+                beam.dim_w = saved_w
+                beam.dim_t = saved_t
+                beam.recalculate_geometry()
+                
+                if beam.profile != best_profile:
+                    beam.profile = best_profile
+                    step_changed = True
+
+            old_w = beam.dim_w
+            util = calculate_utilization_fn(beam)
+            if util > TARGET_UTIL:
+                delta = max(0.001, min(0.015, (util - TARGET_UTIL) * 0.02))
+                beam.dim_w = min(0.3, beam.dim_w + delta)
+            elif util < MIN_UTIL:
+                delta = max(0.0005, min(0.008, (MIN_UTIL - util) * 0.01))
+                beam.dim_w = max(0.01, beam.dim_w - delta)
+            if beam.profile in ["Square Tube", "H-Beam"]:
+                beam.dim_t = max(0.002, min(beam.dim_w * 0.4, beam.dim_w * 0.1))
+            beam.recalculate_geometry()
+            if not math.isclose(beam.dim_w, old_w, abs_tol=1e-5):
+                step_changed = True
+        return step_changed

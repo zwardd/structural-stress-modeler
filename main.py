@@ -59,6 +59,8 @@ selected_beam_idx = None
 
 current_mode = "SELECT" 
 is_playing = False       
+is_optimizing = False
+allow_profile_switching = True
 grid_enabled = True
 show_deformed = True
 gravity_multiplier = 0.0
@@ -103,7 +105,7 @@ def find_proxy_limit(beam):
             mid_x = ax + dx * proj_t
             mid_y = ay + dy * proj_t
             perp_dist = (px_pos - mid_x) * nx + (py_pos - mid_y) * ny
-            if abs(perp_dist) < 40.0 and abs(perp_dist) < abs(min_dist):
+            if abs(perp_dist) < 12.0 and abs(perp_dist) < abs(min_dist):
                 if (beam.stress < -1e-2 and perp_dist > 0.0) or (beam.stress > 1e-2):
                     min_dist = perp_dist
                     target_node_idx = i
@@ -284,6 +286,8 @@ while is_running:
     btn_benchmark = pygame.Rect(15, 260, 110, 35)
     btn_play      = pygame.Rect(15, 430, 110, 40)
     btn_w_toggle  = pygame.Rect(15, 485, 110, 30)
+    btn_optimize  = pygame.Rect(15, 525, 110, 35)
+    chk_profile   = pygame.Rect(15, 570, 14, 14)
 
     for event in pygame.event.get():
         if event.type == pygame.QUIT:
@@ -320,6 +324,7 @@ while is_running:
                             gravity_multiplier, first_break_gravity = 0.0, None
                             fading_beams.clear()
                             show_benchmark_hud = False
+                            is_optimizing = False
                             trigger_status("PROJECT LOADED")
                         else:
                             trigger_status("FAILED TO LOAD FILE")
@@ -327,6 +332,7 @@ while is_running:
 
             if event.key == pygame.K_SPACE:
                 is_playing = not is_playing
+                is_optimizing = False
                 active_node_bnd = None
                 input_active = False
             if event.key == pygame.K_EQUALS:
@@ -340,7 +346,7 @@ while is_running:
                     active_node_bnd, selected_node_idx, selected_beam_idx = None, None, None
                     gravity_multiplier, first_break_gravity = 0.0, None
                     fading_beams.clear()
-                    input_active, show_benchmark_hud = False, False
+                    input_active, show_benchmark_hud, is_optimizing = False, False, False
                 elif event.key == pygame.K_g: grid_enabled = not grid_enabled
                 elif event.key == pygame.K_d: show_deformed = not show_deformed
                 elif event.key == pygame.K_w:
@@ -350,6 +356,7 @@ while is_running:
                     if show_benchmark_hud:
                         truss.load_benchmark_case()
                         selected_node_idx, selected_beam_idx, active_node_bnd, first_break_gravity = None, None, None, None
+                        is_optimizing = False
                 elif event.key == pygame.K_1: truss.set_material("Steel")
                 elif event.key == pygame.K_2: truss.set_material("Aluminum")
                 elif event.key == pygame.K_3: truss.set_material("Titanium")
@@ -387,9 +394,18 @@ while is_running:
             if sidebar_rect.collidepoint(mouse_pos):
                 if btn_play.collidepoint(mouse_pos):
                     is_playing = not is_playing
+                    is_optimizing = False
                     input_active = False
                 elif btn_w_toggle.collidepoint(mouse_pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
+                elif btn_optimize.collidepoint(mouse_pos) and not is_playing:
+                    is_optimizing = not is_optimizing
+                    if is_optimizing:
+                        trigger_status("OPTIMIZATION ENGINE ACTIVE")
+                    else:
+                        trigger_status("OPTIMIZATION HALTED")
+                elif chk_profile.inflate(10, 10).collidepoint(mouse_pos):
+                    allow_profile_switching = not allow_profile_switching
                 elif btn_select.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "SELECT", False
                 elif btn_node.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "NODE", False
                 elif btn_beam.collidepoint(mouse_pos) and not is_playing: current_mode, input_active = "BEAM", False
@@ -399,6 +415,7 @@ while is_running:
                     if show_benchmark_hud:
                         truss.load_benchmark_case()
                         selected_node_idx, selected_beam_idx, active_node_bnd, first_break_gravity = None, None, None, None
+                        is_optimizing = False
                 continue
 
             if input_active: input_active, input_buffer = False, ""
@@ -476,8 +493,19 @@ while is_running:
     else:
         current_def_scale += (0.0 - current_def_scale) * 0.15
         first_break_gravity = None
-        for b in truss.beams: b.reset_status()
-        solve_truss(truss, 0.0)
+        if is_optimizing:
+            if not truss.is_stable or len(truss.beams) == 0:
+                is_optimizing = False
+                trigger_status("OPTIMIZATION FAILED: INVALID STRUCTURE")
+            else:
+                changed = truss.optimize_step(calculate_utilization, solve_truss, gravity_multiplier, allow_profile_switching)
+                if not changed:
+                    is_optimizing = False
+                    trigger_status("OPTIMIZATION COMPLETE (FOS > 2.0 ACHIEVED)")
+        else:
+            for b in truss.beams:
+                b.reset_status()
+            solve_truss(truss, 0.0)
 
     last_gravity_multiplier = gravity_multiplier
 
@@ -522,11 +550,13 @@ while is_running:
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
     screen.blit(fos_label, (15, 375))
     
-    if not truss.is_stable:
+    if not truss.is_stable or len(truss.beams) == 0:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
-    elif max_util >= 1.0 or not math.isfinite(fos_val):
+    elif max_util >= 1.6:
         fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
-    elif fos_val == float('inf'):
+    elif max_util >= 1.0:
+        fos_txt = font_header.render("FAIL", True, COLOR_YIELDING)
+    elif max_util == 0.0 or not math.isfinite(fos_val):
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
         fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
@@ -541,6 +571,17 @@ while is_running:
     pygame.draw.rect(screen, COLOR_PLAY_GREEN if truss.self_weight_enabled else COLOR_LOAD, btn_w_toggle, width=1, border_radius=4)
     w_label = "Weight: ON" if truss.self_weight_enabled else "Weight: OFF"
     screen.blit(font_body.render(w_label, True, COLOR_TEXT_MAIN), (btn_w_toggle.x + 16, btn_w_toggle.y + 6))
+
+    opt_color = COLOR_PLAY_GREEN if is_optimizing else COLOR_UI_BORDER
+    pygame.draw.rect(screen, opt_color if is_optimizing else COLOR_BACKGROUND, btn_optimize, border_radius=4)
+    pygame.draw.rect(screen, COLOR_UI_BORDER, btn_optimize, width=1, border_radius=4)
+    screen.blit(font_header.render("OPTIMIZE", True, COLOR_TEXT_MAIN if is_optimizing else COLOR_TEXT_MUTED), (btn_optimize.x + 18, btn_optimize.y + 9))
+
+    pygame.draw.rect(screen, (10, 10, 12), chk_profile, border_radius=2)
+    pygame.draw.rect(screen, COLOR_UI_BORDER, chk_profile, width=1, border_radius=2)
+    if allow_profile_switching:
+        pygame.draw.rect(screen, COLOR_PLAY_GREEN, chk_profile.inflate(-4, -4), border_radius=1)
+    screen.blit(font_body.render("Swap Profile", True, COLOR_TEXT_MAIN if allow_profile_switching else COLOR_TEXT_MUTED), (chk_profile.x + 20, chk_profile.y - 1))
 
     pygame.draw.rect(screen, COLOR_SIM_ZONE, sim_rect, border_radius=8)
     if grid_enabled:

@@ -40,79 +40,77 @@ def solve_truss(truss, gravity_multiplier=0.0):
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
         
-        L = truss.get_beam_length(beam)
-        if L == 0:
+        dx = node_b.x - node_a.x
+        dy = -(node_b.y - node_a.y)
+        L = math.hypot(dx, dy) * 0.0125
+        
+        if L < 1e-5:
             continue
             
-        if truss.self_weight_enabled and gravity_multiplier > 0.0:
-            beam_mass = L * beam.area * beam.density
-            half_weight_n = (beam_mass * g) / 2.0
-            F_global[idx_a * 2 + 1] -= half_weight_n
-            F_global[idx_b * 2 + 1] -= half_weight_n
-            
-        cos_t = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
-        sin_t = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)
+        cos_t = dx / (L / 0.0125)
+        sin_t = dy / (L / 0.0125)
         
-        k_element = (beam.area * beam.modulus / L) * np.array([
+        if g > 0.0 and truss.self_weight_enabled:
+            beam_mass = L * beam.area * beam.density
+            half_weight = (beam_mass * g) / 2.0
+            F_global[idx_a * 2 + 1] -= half_weight
+            F_global[idx_b * 2 + 1] -= half_weight
+
+        k_local = (beam.modulus * beam.area / L) * np.array([
             [ cos_t**2,  cos_t*sin_t, -cos_t**2, -cos_t*sin_t],
-            [ cos_t*sin_t, sin_t**2,  -cos_t*sin_t, -sin_t**2],
+            [ cos_t*sin_t,  sin_t**2, -cos_t*sin_t, -sin_t**2],
             [-cos_t**2, -cos_t*sin_t,  cos_t**2,  cos_t*sin_t],
             [-cos_t*sin_t, -sin_t**2,  cos_t*sin_t,  sin_t**2]
         ])
         
         indices = [idx_a * 2, idx_a * 2 + 1, idx_b * 2, idx_b * 2 + 1]
-        for r_local, r_global in enumerate(indices):
-            for c_local, c_global in enumerate(indices):
-                K_global[r_global, c_global] += k_element[r_local, c_local]
+        for r_idx, r in enumerate(indices):
+            for c_idx, c in enumerate(indices):
+                K_global[r, c] += k_local[r_idx, c_idx]
 
-    free_dofs = []
-    boundary_dofs = []
-    
+    fixed_dofs = []
     for i, node in enumerate(truss.nodes):
-        if not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y:
+        if not node_has_connections[i]:
+            fixed_dofs.append(i * 2)
+            fixed_dofs.append(i * 2 + 1)
             continue
         if node.is_anchor_x:
-            boundary_dofs.append(i * 2)
-        else:
-            free_dofs.append(i * 2)
-            
+            fixed_dofs.append(i * 2)
         if node.is_anchor_y:
-            boundary_dofs.append(i * 2 + 1)
-        else:
-            free_dofs.append(i * 2 + 1)
+            fixed_dofs.append(i * 2 + 1)
 
+    free_dofs = [d for d in range(matrix_dim) if d not in fixed_dofs]
+    
     if len(free_dofs) == 0:
+        for beam in truss.beams:
+            beam.force = 0.0
+            beam.stress = 0.0
         truss.displacements = np.zeros(matrix_dim)
         truss.is_stable = True
         return
 
-    K_ff = K_global[np.ix_(free_dofs, free_dofs)]
-    F_f = F_global[free_dofs]
+    K_free = K_global[np.ix_(free_dofs, free_dofs)]
+    F_free = F_global[free_dofs]
 
     try:
-        if np.linalg.matrix_rank(K_ff) < len(free_dofs):
-            truss.is_stable = False
-            truss.displacements = None
-            for beam in truss.beams:
-                beam.force = 0.0
-                beam.stress = 0.0
-            return
-            
-        u_free = np.linalg.solve(K_ff, F_f)
+        rcond_val = 1.0 / np.linalg.cond(K_free)
+        if rcond_val < 1e-12 or not np.isfinite(rcond_val):
+            raise np.linalg.LinAlgError
+        u_free = np.linalg.solve(K_free, F_free)
         truss.is_stable = True
-    except np.linalg.LinAlgError:
-        truss.is_stable = False
-        truss.displacements = None
+    except (np.linalg.LinAlgError, ValueError):
         for beam in truss.beams:
             beam.force = 0.0
             beam.stress = 0.0
+        truss.displacements = None
+        truss.is_stable = False
         return
 
-    u_full = np.zeros(matrix_dim)
-    u_full[free_dofs] = u_free
-    truss.displacements = u_full
+    u_global = np.zeros(matrix_dim)
+    u_global[free_dofs] = u_free
+    truss.displacements = u_global
 
-    F_reactions = np.dot(K_global, u_full) - F_global
+    F_reactions = np.dot(K_global, u_global) - F_global
     for i, node in enumerate(truss.nodes):
         if node.is_anchor_x:
             node.rx = F_reactions[i * 2]
@@ -130,30 +128,31 @@ def solve_truss(truss, gravity_multiplier=0.0):
         node_a = truss.nodes[idx_a]
         node_b = truss.nodes[idx_b]
         
-        L = truss.get_beam_length(beam)
-        cos_t = (node_b.x - node_a.x) / (L * truss.PIXELS_PER_METER)
-        sin_t = -(node_b.y - node_a.y) / (L * truss.PIXELS_PER_METER)
+        dx = node_b.x - node_a.x
+        dy = -(node_b.y - node_a.y)
+        L = math.hypot(dx, dy) * 0.0125
         
-        u_elem = np.array([
-            u_full[idx_a * 2],
-            u_full[idx_a * 2 + 1],
-            u_full[idx_b * 2],
-            u_full[idx_b * 2 + 1]
-        ])
+        if L < 1e-5:
+            continue
+            
+        cos_t = dx / (L / 0.0125)
+        sin_t = dy / (L / 0.0125)
         
-        transformation = np.array([-cos_t, -sin_t, cos_t, sin_t])
-        delta_L = np.dot(transformation, u_elem)
+        u_a_x = u_global[idx_a * 2]
+        u_a_y = u_global[idx_a * 2 + 1]
+        u_b_x = u_global[idx_b * 2]
+        u_b_y = u_global[idx_b * 2 + 1]
         
-        beam.force = (beam.area * beam.modulus / L) * delta_L
-        beam.stress = beam.force / beam.area
+        dl = (u_b_x - u_a_x) * cos_t + (u_b_y - u_a_y) * sin_t
+        beam.stress = beam.modulus * (dl / L)
+        beam.force = beam.stress * beam.area
 
 def calculate_benchmark_metrics(truss):
-    if len(truss.nodes) < 3 or len(truss.beams) < 3:
+    if len(truss.nodes) != 3 or len(truss.beams) != 3:
         return None
         
     diag_beam = None
     horiz_beam = None
-    
     for b in truss.beams:
         if (b.node_a == 0 and b.node_b == 2) or (b.node_a == 2 and b.node_b == 0):
             diag_beam = b
