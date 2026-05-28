@@ -197,6 +197,45 @@ def draw_profile_preview(surf, x, y, width, height, beam):
             pygame.draw.circle(surf, color_line, (center_x, center_y), radius, width=1)
             pygame.draw.circle(surf, (12, 12, 14), (center_x, center_y), max(1, radius // 6))
 
+def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selected):
+    if beam.status != "YIELDING" or beam.force == 0.0:
+        if is_selected:
+            pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+        pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
+        return
+
+    dx = bx - ax
+    dy = by - ay
+    L_pixels = math.hypot(dx, dy)
+    if L_pixels < 1:
+        return
+
+    nx = -dy / L_pixels
+    ny = dx / L_pixels
+
+    util = calculate_utilization(beam)
+    max_bow = min(35.0, (util - 0.95) * 18.0)
+    if max_bow < 1.0:
+        max_bow = 1.0
+
+    if beam.stress > 0.0:
+        max_bow *= 0.15
+
+    segments = 16
+    points = []
+    for s in range(segments + 1):
+        t = s / segments
+        x_line = ax + dx * t
+        y_line = ay + dy * t
+        offset = max_bow * math.sin(math.pi * t)
+        x_curve = x_line + nx * offset
+        y_curve = y_line + ny * offset
+        points.append((x_curve, y_curve))
+
+    if is_selected:
+        pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, points, thickness + 4)
+    pygame.draw.lines(surface, color, False, points, thickness)
+
 is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
@@ -493,9 +532,7 @@ while is_running:
             pygame.draw.line(screen, (45, 45, 50), (truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y), (truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y), 1)
         
         thickness_pixels = max(2, min(16, int(beam.dim_w * 140.0)))
-        if i == selected_beam_idx:
-            pygame.draw.line(screen, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness_pixels + 4)
-        pygame.draw.line(screen, get_stress_color(beam), (ax, ay), (bx, by), thickness_pixels)
+        draw_curved_beam(screen, ax, ay, bx, by, beam, thickness_pixels, get_stress_color(beam), i == selected_beam_idx)
 
     for fb in fading_beams:
         alpha = int(fb[5] * 255)
