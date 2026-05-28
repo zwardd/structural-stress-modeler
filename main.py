@@ -30,6 +30,7 @@ COLOR_LOAD       = (239, 68, 68)
 COLOR_REACTION   = (168, 85, 247)
 COLOR_HIGHLIGHT  = (255, 255, 255)  
 COLOR_PLAY_GREEN = (34, 197, 94)
+COLOR_YIELDING   = (249, 115, 22)
 
 COLOR_ZERO_LOAD = (144, 238, 144)   
 COLOR_MID_LOAD  = (234, 179, 8)     
@@ -44,9 +45,9 @@ NODE_RADIUS = 6
 TARGET_DEF_SCALE = 2200.0
 
 MATERIAL_SPECS = {
-    "Steel": {"yield": 250e6, "density": 7850, "label": "Structural Steel"},
-    "Aluminum": {"yield": 275e6, "density": 2700, "label": "6061-T6 Aluminum"},
-    "Titanium": {"yield": 880e6, "density": 4430, "label": "Ti-6Al-4V Titanium"}
+    "Steel": {"yield": 250e6, "ultimate": 400e6, "density": 7850, "label": "Structural Steel"},
+    "Aluminum": {"yield": 275e6, "ultimate": 310e6, "density": 2700, "label": "6061-T6 Aluminum"},
+    "Titanium": {"yield": 880e6, "ultimate": 950e6, "density": 4430, "label": "Ti-6Al-4V Titanium"}
 }
 
 clock = pygame.time.Clock()
@@ -77,10 +78,10 @@ fading_beams = []
 def trigger_status(text):
     global status_banner_text, status_banner_timer
     status_banner_text = text
-    status_banner_timer = 180
+    status_banner_timer = 180  
 
 def calculate_utilization(beam):
-    if beam.is_broken or beam.force == 0.0:
+    if beam.status == "FRACTURED" or beam.force == 0.0:
         return 0.0
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
@@ -95,8 +96,11 @@ def calculate_utilization(beam):
 def get_stress_color(beam):
     if not truss.is_stable:
         return COLOR_TEXT_MUTED
-    if beam.is_broken or beam.force == 0.0:
+    if beam.status == "FRACTURED" or beam.force == 0.0:
         return (180, 180, 185)
+    if beam.status == "YIELDING":
+        pulse = (math.sin(pygame.time.get_ticks() * 0.01) + 1.0) / 2.0
+        return (int(249 - pulse * 15), int(115 + pulse * 25), int(22 - pulse * 10))
     specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
     yield_util = abs(beam.stress) / specs["yield"]
     is_compression = beam.stress < -1e-2
@@ -224,7 +228,6 @@ while is_running:
                 elif event.unicode in "0123456789.-": input_buffer += event.unicode
                 continue
 
-            # Check for file shortcuts (Ctrl+S and Ctrl+O)
             ctrl_pressed = pygame.key.get_pressed()[pygame.K_LCTRL] or pygame.key.get_pressed()[pygame.K_RCTRL]
             if ctrl_pressed and not is_playing:
                 if event.key == pygame.K_s:
@@ -288,7 +291,8 @@ while is_running:
                     m_list = ["Steel", "Aluminum", "Titanium"]
                     next_m = m_list[(m_list.index(b.material) + 1) % 3]
                     b.update_material_properties(next_m)
-                    b.is_broken, b.broken_at_gravity, first_break_gravity = False, None, None
+                    b.reset_status()
+                    first_break_gravity = None
                 elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
                     if selected_beam_idx is not None:
                         truss.beams.pop(selected_beam_idx)
@@ -337,7 +341,7 @@ while is_running:
                     selected_beam_idx = None
                     if clicked_node_idx is None:
                         for i, b in enumerate(truss.beams):
-                            if getattr(b, 'is_broken', False): continue
+                            if b.status == "FRACTURED": continue
                             if point_to_line_distance(mouse_pos[0], mouse_pos[1], truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < 8:
                                 selected_beam_idx = i
                 elif current_mode == "NODE" and clicked_node_idx is None:
@@ -369,17 +373,22 @@ while is_running:
             gravity_multiplier = first_break_gravity
 
         for b in truss.beams:
-            if b.is_broken and b.broken_at_gravity is not None:
+            if b.status != "NORMAL" and b.broken_at_gravity is not None:
                 if gravity_multiplier < b.broken_at_gravity:
-                    b.is_broken, b.broken_at_gravity = False, None
+                    b.reset_status()
         
-        if not any(getattr(b, 'is_broken', False) for b in truss.beams): first_break_gravity = None
+        if not any(b.status == "FRACTURED" for b in truss.beams): first_break_gravity = None
 
         solve_truss(truss, gravity_multiplier)
 
         if truss.is_stable:
             for b in truss.beams:
-                if not b.is_broken and calculate_utilization(b) >= 1.0:
+                if b.status == "FRACTURED": continue
+                specs = MATERIAL_SPECS.get(b.material, MATERIAL_SPECS["Steel"])
+                utilization = calculate_utilization(b)
+                
+                if abs(b.stress) >= specs["ultimate"]:
+                    b.status = "FRACTURED"
                     b.is_broken = True
                     b.broken_at_gravity = gravity_multiplier
                     if first_break_gravity is None: first_break_gravity = gravity_multiplier
@@ -392,10 +401,13 @@ while is_running:
                     fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
                     fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
                     break 
+                elif utilization >= 1.0 and b.status == "NORMAL":
+                    b.status = "YIELDING"
+                    b.broken_at_gravity = gravity_multiplier
     else:
         current_def_scale += (0.0 - current_def_scale) * 0.15
         first_break_gravity = None
-        for b in truss.beams: b.is_broken, b.broken_at_gravity = False, None
+        for b in truss.beams: b.reset_status()
         solve_truss(truss, 0.0)
 
     last_gravity_multiplier = gravity_multiplier
@@ -429,12 +441,12 @@ while is_running:
     
     total_mass, max_util = 0.0, 0.0
     for b in truss.beams:
-        if getattr(b, 'is_broken', False): continue
+        if b.status == "FRACTURED": continue
         total_mass += truss.get_beam_length(b) * b.area * b.density
         max_util = max(max_util, calculate_utilization(b))
         
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
-    if selected_beam_idx is not None and getattr(truss.beams[selected_beam_idx], 'is_broken', False):
+    if selected_beam_idx is not None and truss.beams[selected_beam_idx].status == "FRACTURED":
         selected_beam_idx = None
     
     screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 350))
@@ -469,15 +481,15 @@ while is_running:
 
     node_has_connections = [False] * len(truss.nodes)
     for beam in truss.beams:
-        if not getattr(beam, 'is_broken', False):
+        if beam.status != "FRACTURED":
             node_has_connections[beam.node_a] = True
             node_has_connections[beam.node_b] = True
 
     for i, beam in enumerate(truss.beams):
-        if getattr(beam, 'is_broken', False): continue
+        if beam.status == "FRACTURED": continue
         ax, ay = get_def_pos(beam.node_a, truss.nodes[beam.node_a])
         bx, by = get_def_pos(beam.node_b, truss.nodes[beam.node_b])
-        if show_deformed and truss.displacements is not None and truss.is_stable and is_playing:
+        if show_deformed and truss.displacements is None and truss.is_stable and is_playing:
             pygame.draw.line(screen, (45, 45, 50), (truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y), (truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y), 1)
         
         thickness_pixels = max(2, min(16, int(beam.dim_w * 140.0)))
@@ -502,7 +514,7 @@ while is_running:
         if truss.self_weight_enabled and is_playing and gravity_multiplier > 0.0:
             g = 9.81 * gravity_multiplier
             for beam in truss.beams:
-                if getattr(beam, 'is_broken', False): continue
+                if beam.status == "FRACTURED": continue
                 if beam.node_a == i or beam.node_b == i:
                     total_fy += (truss.get_beam_length(beam) * beam.area * beam.density * g) / 2.0
             
@@ -587,7 +599,7 @@ while is_running:
             if nature == "COMPRESSION" and length_m > 0:
                 p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
                 top_lines.append(f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
-            top_lines.extend([f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%"])
+            top_lines.extend([f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%", f"Status: {beam.status}"])
             
             geom_lines = [f"Profile: {beam.profile} [P]", f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", f"Thickness: {beam.dim_t * 100.0:.1f} cm", f"Area: {beam.area * 1e4:.1f} cm²", f"Length: {length_m:.2f} m"]
         elif selected_node_idx is not None:

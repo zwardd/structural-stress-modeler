@@ -57,6 +57,7 @@ class Beam:
         self.density = 7850.0
         self.stress = 0.0
         self.force = 0.0
+        self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
         
@@ -106,6 +107,11 @@ class Beam:
             r = w / 2.0
             self.area = math.pi * (r * r)
             self.inertia = (math.pi * (r * r * r * r)) / 4.0
+
+    def reset_status(self):
+        self.status = "NORMAL"
+        self.is_broken = False
+        self.broken_at_gravity = None
 
     def to_dict(self):
         return {
@@ -185,17 +191,13 @@ class TrussSystem:
         try:
             with open(filename, "r") as f:
                 project_data = json.load(f)
-            
             self.clear()
             self.self_weight_enabled = project_data.get("self_weight_enabled", True)
             self.active_material = project_data.get("active_material", "Steel")
-            
             for node_data in project_data.get("nodes", []):
                 self.nodes.append(Node.from_dict(node_data))
-                
             for beam_data in project_data.get("beams", []):
                 self.beams.append(Beam.from_dict(beam_data))
-                
             return True
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             return False
@@ -204,22 +206,17 @@ class TrussSystem:
         self.clear()
         self.active_material = "Steel"
         self.self_weight_enabled = False
-        
         self.add_node(450, 150)
         self.add_node(450, 390)
         self.add_node(690, 390)
-        
         self.nodes[0].is_anchor_x = True
         self.nodes[0].is_anchor_y = True
         self.nodes[1].is_anchor_x = True
         self.nodes[1].is_anchor_y = True
-        
         self.nodes[2].load_y = 50000.0
-        
         self.add_beam(0, 1)
         self.add_beam(1, 2)
         self.add_beam(0, 2)
-        
         for beam in self.beams:
             beam.dim_w = 0.05
             beam.dim_t = 0.005
