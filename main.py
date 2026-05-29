@@ -7,6 +7,7 @@ from matrix_solver import solve_truss, calculate_benchmark_metrics
 from constants import *
 from camera import Camera
 from serialization import save_project_dialog, load_project_dialog
+from materials import MaterialManager
 
 root = tk.Tk()
 root.withdraw()
@@ -87,8 +88,8 @@ def find_proxy_limit(beam):
 def calculate_utilization(beam):
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return 0.0
-    specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
-    yield_util = abs(beam.stress) / specs["yield"]
+    yield_stress = MaterialManager.get_yield_stress(beam.material)
+    yield_util = abs(beam.stress) / yield_stress
     if beam.status == "YIELDING":
         limit, proxy_node = find_proxy_limit(beam)
         if proxy_node is not None:
@@ -98,7 +99,7 @@ def calculate_utilization(beam):
     if beam.stress < -1e-2:
         length_m = truss.get_beam_length(beam)
         if length_m > 0:
-            p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
+            p_crit = MaterialManager.calculate_buckling_load(beam.material, beam.inertia, length_m)
             buckle_util = abs(beam.force) / p_crit
             return max(yield_util, buckle_util)
     return yield_util
@@ -111,19 +112,20 @@ def get_stress_color(beam):
     if beam.status == "YIELDING":
         limit, proxy_node = find_proxy_limit(beam)
         if proxy_node is not None:
-            util = abs(beam.stress) / MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])["yield"]
+            yield_stress = MaterialManager.get_yield_stress(beam.material)
+            util = abs(beam.stress) / yield_stress
             if min(35.0, (util - 0.95) * 18.0) >= limit:
                 return (220, 38, 38)
         pulse = (math.sin(pygame.time.get_ticks() * 0.01) + 1.0) / 2.0
         return (int(249 - pulse * 15), int(115 + pulse * 25), int(22 - pulse * 10))
-    specs = MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])
-    yield_util = abs(beam.stress) / specs["yield"]
+    yield_stress = MaterialManager.get_yield_stress(beam.material)
+    yield_util = abs(beam.stress) / yield_stress
     is_compression = beam.stress < -1e-2
     if is_compression:
         length_m = truss.get_beam_length(beam)
         buckle_util = 0.0
         if length_m > 0:
-            p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
+            p_crit = MaterialManager.calculate_buckling_load(beam.material, beam.inertia, length_m)
             buckle_util = abs(beam.force) / p_crit
         utilization = max(yield_util, buckle_util)
         if utilization >= 1.0: return COLOR_MAX_LOAD
@@ -223,7 +225,8 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
         return
     nx = -dy / L_pixels
     ny = dx / L_pixels
-    util = abs(beam.stress) / MATERIAL_SPECS.get(beam.material, MATERIAL_SPECS["Steel"])["yield"]
+    yield_stress = MaterialManager.get_yield_stress(beam.material)
+    util = abs(beam.stress) / yield_stress
     max_bow = min(35.0, (util - 0.95) * 18.0) * camera.zoom_scale
     if max_bow < 1.0:
         max_bow = 1.0
@@ -352,8 +355,7 @@ while is_running:
                     first_break_gravity = None
                 elif event.key == pygame.K_m and selected_beam_idx is not None:
                     b = truss.beams[selected_beam_idx]
-                    m_list = ["Steel", "Aluminum", "Titanium"]
-                    next_m = m_list[(m_list.index(b.material) + 1) % 3]
+                    next_m = MaterialManager.get_next_material(b.material)
                     b.update_material_properties(next_m)
                     b.reset_status()
                     first_break_gravity = None
@@ -464,9 +466,9 @@ while is_running:
         if truss.is_stable:
             for b in truss.beams:
                 if b.status == "FRACTURED": continue
-                specs = MATERIAL_SPECS.get(b.material, MATERIAL_SPECS["Steel"])
+                ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
                 utilization = calculate_utilization(b)
-                if abs(b.stress) >= specs["ultimate"] or utilization >= 1.6:
+                if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
                     b.status = "FRACTURED"
                     b.is_broken = True
                     b.broken_at_gravity = gravity_multiplier

@@ -31,7 +31,7 @@ COLOR_MID_LOAD  = (234, 179, 8)
 COLOR_MAX_LOAD  = (239, 68, 68)     
 
 MATERIAL_SPECS = {
-    "Steel": {"yield": 250e6, "ultimate": 400e6, "density": 7850, "label": "Structural Steel"},
-    "Aluminum": {"yield": 275e6, "ultimate": 310e6, "density": 2700, "label": "6061-T6 Aluminum"},
-    "Titanium": {"yield": 880e6, "ultimate": 950e6, "density": 4430, "label": "Ti-6Al-4V Titanium"}
+    "Steel": {"yield": 250e6, "ultimate": 400e6, "modulus": 200e9, "density": 7850, "label": "Structural Steel"},
+    "Aluminum": {"yield": 275e6, "ultimate": 310e6, "modulus": 70e9, "density": 2700, "label": "6061-T6 Aluminum"},
+    "Titanium": {"yield": 880e6, "ultimate": 950e6, "modulus": 115e9, "density": 4430, "label": "Ti-6Al-4V Titanium"}
 }

@@ -1,5 +1,6 @@
 import math
 import json
+from materials import MaterialManager, MATERIAL_SPECS
 
 class Node:
     def __init__(self, x, y):
@@ -58,48 +59,29 @@ class Beam:
         self.update_material_properties(material)
 
     def update_material_properties(self, material):
+        """Update material and recalculate properties via MaterialManager."""
         self.material = material
-        if material == "Steel":
-            self.modulus = 200e9
-            self.density = 7850
-        elif material == "Aluminum":
-            self.modulus = 70e9
-            self.density = 2700
-        elif material == "Titanium":
-            self.modulus = 115e9
-            self.density = 4430
+        specs = MaterialManager.get_material_specs(material)
+        self.modulus = specs["modulus"]
+        self.density = specs["density"]
         self.recalculate_geometry()
 
     def recalculate_geometry(self):
-        w = self.dim_w
-        t = self.dim_t
-        if self.profile == "Square Tube":
-            self.area = w**2 - (w - 2*t)**2
-            self.inertia = (w**4 - (w - 2*t)**4) / 12.0
-        elif self.profile == "H-Beam":
-            self.area = (w * t * 2) + ((w - 2*t) * t)
-            self.inertia = ((w * w**3) - ((w - t) * (w - 2*t)**3)) / 12.0
-        elif self.profile == "Solid Bar":
-            radius = w / 2.0
-            self.area = math.pi * radius**2
-            self.inertia = (math.pi * radius**4) / 4.0
+        """Use MaterialManager to calculate cross-sectional properties."""
+        self.area, self.inertia = MaterialManager.calculate_area_inertia(
+            self.profile, self.dim_w, self.dim_t
+        )
 
     def cycle_profile(self):
-        profiles = ["Square Tube", "H-Beam", "Solid Bar"]
-        self.profile = profiles[(profiles.index(self.profile) + 1) % len(profiles)]
+        """Cycle to next profile type via MaterialManager."""
+        self.profile = MaterialManager.get_next_profile(self.profile)
         self.recalculate_geometry()
 
     def adjust_dimension(self, delta):
-        if self.profile == "Solid Bar":
-            self.dim_w = max(0.01, min(0.32, self.dim_w + delta))
-        else:
-            new_w = max(0.01, min(0.32, self.dim_w + delta))
-            if delta > 0:
-                self.dim_w = new_w
-                self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t + (delta * 0.15)))
-            else:
-                self.dim_w = new_w
-                self.dim_t = max(0.002, min(self.dim_w * 0.4, self.dim_t))
+        """Adjust dimensions via MaterialManager."""
+        self.dim_w, self.dim_t = MaterialManager.adjust_dimensions(
+            self.profile, self.dim_w, self.dim_t, delta
+        )
         self.recalculate_geometry()
 
     def reset_status(self):
