@@ -2,11 +2,11 @@ import pygame
 import sys
 import math
 import tkinter as tk
-from tkinter import filedialog
 from truss_model import TrussSystem
 from matrix_solver import solve_truss, calculate_benchmark_metrics
 from constants import *
 from camera import Camera
+from serialization import save_project_dialog, load_project_dialog
 
 root = tk.Tk()
 root.withdraw()
@@ -288,24 +288,22 @@ while is_running:
             ctrl_pressed = pygame.key.get_pressed()[pygame.K_LCTRL] or pygame.key.get_pressed()[pygame.K_RCTRL]
             if ctrl_pressed and not is_playing:
                 if event.key == pygame.K_s:
-                    file_path = filedialog.asksaveasfilename(defaultextension=".json", filetypes=[("JSON Files", "*.json")])
-                    if file_path:
-                        truss.save_to_file(file_path)
-                        trigger_status("PROJECT SAVED SUCCESSFULLY")
+                    status = save_project_dialog(truss)
+                    if status:
+                        trigger_status(status)
                     continue
                 elif event.key == pygame.K_o:
-                    file_path = filedialog.askopenfilename(filetypes=[("JSON Files", "*.json")])
-                    if file_path:
-                        if truss.load_from_file(file_path):
-                            selected_node_idx, selected_beam_idx, active_node_bnd = None, None, None
-                            gravity_multiplier, first_break_gravity = 0.0, None
-                            fading_beams.clear()
-                            show_benchmark_hud = False
-                            is_optimizing = False
-                            camera.reset()
-                            trigger_status("PROJECT LOADED")
-                        else:
-                            trigger_status("FAILED TO LOAD FILE")
+                    success, status = load_project_dialog(truss)
+                    if success:
+                        selected_node_idx, selected_beam_idx, active_node_bnd = None, None, None
+                        gravity_multiplier, first_break_gravity = 0.0, None
+                        fading_beams.clear()
+                        show_benchmark_hud = False
+                        is_optimizing = False
+                        camera.reset()
+                        trigger_status(status)
+                    elif status:
+                        trigger_status(status)
                     continue
 
             if event.key == pygame.K_SPACE and not pygame.key.get_pressed()[pygame.K_LALT]:
