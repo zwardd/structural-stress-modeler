@@ -1,7 +1,6 @@
 import math
 from constants import MATERIAL_SPECS
 
-# Profile types available for beams - all profile math centralized here
 PROFILE_TYPES = ["Square Tube", "H-Beam", "Solid Bar"]
 
 
@@ -33,7 +32,7 @@ class MaterialManager:
     def get_modulus(material_name):
         """Get Young's modulus in Pa for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
-        return specs.get("modulus", 200e9)  # Default to Steel modulus
+        return specs.get("modulus", 200e9)
     
     @staticmethod
     def get_density(material_name):
