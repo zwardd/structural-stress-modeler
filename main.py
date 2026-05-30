@@ -8,6 +8,7 @@ from constants import *
 from camera import Camera
 from serialization import save_project_dialog, load_project_dialog
 from materials import MaterialManager
+from physics_engine import PhysicsSimulation
 
 root = tk.Tk()
 root.withdraw()
@@ -29,6 +30,7 @@ selected_beam_idx = None
 
 current_mode = "SELECT" 
 is_playing = False       
+is_physics_playing = False
 is_optimizing = False
 allow_profile_switching = True
 grid_enabled = True
@@ -48,11 +50,21 @@ input_type = "Y"
 fading_beams = []  
 
 camera = Camera()
+physics_sim = None
+saved_truss_state = None
 
 def trigger_status(text):
     global status_banner_text, status_banner_timer
     status_banner_text = text
     status_banner_timer = 180  
+
+def capture_truss_state():
+    return [{"x": n.x, "y": n.y} for n in truss.nodes]
+
+def restore_truss_state(state):
+    for i, s in enumerate(state):
+        truss.nodes[i].x = s["x"]
+        truss.nodes[i].y = s["y"]
 
 def find_proxy_limit(beam):
     if beam.status != "YIELDING" or beam.force == 0.0:
@@ -105,6 +117,8 @@ def calculate_utilization(beam):
     return yield_util
 
 def get_stress_color(beam):
+    if is_physics_playing:
+        return (59, 130, 246)
     if not truss.is_stable:
         return COLOR_TEXT_MUTED
     if beam.status == "FRACTURED" or beam.force == 0.0:
@@ -166,6 +180,8 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
 def get_def_pos(idx, node):
+    if is_physics_playing:
+        return node.x, node.y
     if truss.displacements is None or not show_deformed or not truss.is_stable:
         return node.x, node.y
     dx = truss.displacements[idx * 2] * current_def_scale
@@ -213,7 +229,7 @@ def draw_profile_preview(surf, x, y, width, height, beam):
             pygame.draw.circle(surf, (12, 12, 14), (center_x, center_y), max(1, radius // 6))
 
 def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selected):
-    if beam.status != "YIELDING" or beam.force == 0.0:
+    if beam.status != "YIELDING" or beam.force == 0.0 or is_physics_playing:
         if is_selected:
             pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
         pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
@@ -252,15 +268,16 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
 is_running = True
 while is_running:
     sidebar_rect = pygame.Rect(0, 0, 140, 700)
-    btn_select    = pygame.Rect(15, 80, 110, 35)
-    btn_node      = pygame.Rect(15, 125, 110, 35)
-    btn_beam      = pygame.Rect(15, 170, 110, 35)
-    btn_load      = pygame.Rect(15, 215, 110, 35)
-    btn_benchmark = pygame.Rect(15, 260, 110, 35)
-    btn_play      = pygame.Rect(15, 430, 110, 40)
-    btn_w_toggle  = pygame.Rect(15, 485, 110, 30)
-    btn_optimize  = pygame.Rect(15, 525, 110, 35)
-    chk_profile   = pygame.Rect(15, 570, 14, 14)
+    btn_select       = pygame.Rect(15, 80, 110, 35)
+    btn_node         = pygame.Rect(15, 125, 110, 35)
+    btn_beam         = pygame.Rect(15, 170, 110, 35)
+    btn_load         = pygame.Rect(15, 215, 110, 35)
+    btn_benchmark    = pygame.Rect(15, 260, 110, 35)
+    btn_static_play  = pygame.Rect(15, 430, 110, 35)
+    btn_physics_play = pygame.Rect(15, 475, 110, 40)
+    btn_w_toggle     = pygame.Rect(15, 525, 110, 30)
+    btn_optimize     = pygame.Rect(15, 565, 110, 35)
+    chk_profile      = pygame.Rect(15, 610, 14, 14)
 
     mouse_pos = pygame.mouse.get_pos()
 
@@ -289,7 +306,7 @@ while is_running:
                 continue
 
             ctrl_pressed = pygame.key.get_pressed()[pygame.K_LCTRL] or pygame.key.get_pressed()[pygame.K_RCTRL]
-            if ctrl_pressed and not is_playing:
+            if ctrl_pressed and not is_playing and not is_physics_playing:
                 if event.key == pygame.K_s:
                     status = save_project_dialog(truss)
                     if status:
@@ -310,10 +327,23 @@ while is_running:
                     continue
 
             if event.key == pygame.K_SPACE and not pygame.key.get_pressed()[pygame.K_LALT]:
-                is_playing = not is_playing
-                is_optimizing = False
-                active_node_bnd = None
-                input_active = False
+                if not is_playing and not is_physics_playing:
+                    saved_truss_state = capture_truss_state()
+                    physics_sim = PhysicsSimulation(truss, gravity_mult=1.0)
+                    is_physics_playing = True
+                    is_optimizing = False
+                    active_node_bnd = None
+                    input_active = False
+                    trigger_status("DYNAMIC PLAY MODE ACTIVE")
+                elif is_physics_playing:
+                    is_physics_playing = False
+                    physics_sim = None
+                    if saved_truss_state:
+                        restore_truss_state(saved_truss_state)
+                    trigger_status("DYNAMIC SIMULATION RESET")
+                elif is_playing:
+                    is_playing = False
+                    trigger_status("STATIC PLAY PAUSED")
             elif event.key == pygame.K_h:
                 camera.reset()
                 trigger_status("CAMERA RESET TO ORIGIN")
@@ -322,7 +352,7 @@ while is_running:
                 else: gravity_multiplier = min(100.0, gravity_multiplier + 0.5)
             elif event.key == pygame.K_MINUS: gravity_multiplier = max(0.0, gravity_multiplier - 0.5)
                 
-            if not is_playing:
+            if not is_playing and not is_physics_playing:
                 if event.key == pygame.K_r:
                     truss.clear()
                     active_node_bnd, selected_node_idx, selected_beam_idx = None, None, None
@@ -374,23 +404,39 @@ while is_running:
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if sidebar_rect.collidepoint(event.pos):
-                if btn_play.collidepoint(event.pos):
-                    is_playing = not is_playing
-                    is_optimizing = False
-                    input_active = False
+                if btn_static_play.collidepoint(event.pos):
+                    if not is_physics_playing:
+                        is_playing = not is_playing
+                        is_optimizing = False
+                        input_active = False
+                elif btn_physics_play.collidepoint(event.pos):
+                    if not is_playing:
+                        if not is_physics_playing:
+                            saved_truss_state = capture_truss_state()
+                            physics_sim = PhysicsSimulation(truss, gravity_mult=1.0)
+                            is_physics_playing = True
+                            is_optimizing = False
+                            input_active = False
+                            trigger_status("DYNAMIC PLAY MODE ACTIVE")
+                        else:
+                            is_physics_playing = False
+                            physics_sim = None
+                            if saved_truss_state:
+                                restore_truss_state(saved_truss_state)
+                            trigger_status("DYNAMIC SIMULATION RESET")
                 elif btn_w_toggle.collidepoint(event.pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
-                elif btn_optimize.collidepoint(event.pos) and not is_playing:
+                elif btn_optimize.collidepoint(event.pos) and not is_playing and not is_physics_playing:
                     is_optimizing = not is_optimizing
                     if is_optimizing: trigger_status("OPTIMIZATION ENGINE ACTIVE")
                     else: trigger_status("OPTIMIZATION HALTED")
                 elif chk_profile.inflate(10, 10).collidepoint(event.pos):
                     allow_profile_switching = not allow_profile_switching
-                elif btn_select.collidepoint(event.pos) and not is_playing: current_mode, input_active = "SELECT", False
-                elif btn_node.collidepoint(event.pos) and not is_playing: current_mode, input_active = "NODE", False
-                elif btn_beam.collidepoint(event.pos) and not is_playing: current_mode, input_active = "BEAM", False
-                elif btn_load.collidepoint(event.pos) and not is_playing: current_mode, input_active = "LOAD", False
-                elif btn_benchmark.collidepoint(event.pos) and not is_playing:
+                elif btn_select.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "SELECT", False
+                elif btn_node.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "NODE", False
+                elif btn_beam.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "BEAM", False
+                elif btn_load.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "LOAD", False
+                elif btn_benchmark.collidepoint(event.pos) and not is_playing and not is_physics_playing:
                     show_benchmark_hud = not show_benchmark_hud
                     if show_benchmark_hud:
                         truss.load_benchmark_case()
@@ -444,7 +490,7 @@ while is_running:
 
     camera.update(mouse_pos)
 
-    if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not input_active:
+    if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not is_physics_playing and not input_active:
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
             first_break_gravity, show_benchmark_hud = None, False
@@ -453,7 +499,11 @@ while is_running:
         if keys[pygame.K_LEFT]: truss.nodes[selected_node_idx].load_x -= 1000.0
         if keys[pygame.K_RIGHT]: truss.nodes[selected_node_idx].load_x += 1000.0
 
-    if is_playing:
+    if is_physics_playing:
+        if physics_sim is not None:
+            physics_sim.step()
+            physics_sim.sync_to_truss(truss)
+    elif is_playing:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
         if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
             gravity_multiplier = first_break_gravity
@@ -522,10 +572,10 @@ while is_running:
         (btn_load, "4. + Load", "LOAD")
     ]
     for btn, label, mode in modes_list:
-        pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_playing else COLOR_BACKGROUND, btn, border_radius=4)
+        pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_playing and not is_physics_playing else COLOR_BACKGROUND, btn, border_radius=4)
         screen.blit(font_body.render(label, True, COLOR_TEXT_MAIN), (btn.x + 12, btn.y + 10))
 
-    pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and not is_playing else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
+    pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and not is_playing and not is_physics_playing else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
     screen.blit(font_body.render("5. Benchmark", True, COLOR_TEXT_MAIN), (btn_benchmark.x + 12, btn_benchmark.y + 10))
 
     pygame.draw.line(screen, COLOR_UI_BORDER, (10, 310), (130, 310), 1)
@@ -558,9 +608,14 @@ while is_running:
     screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 373))
 
     pygame.draw.line(screen, COLOR_UI_BORDER, (10, 410), (130, 410), 1)
-    pygame.draw.rect(screen, (30, 50, 35) if is_playing else COLOR_BACKGROUND, btn_play, border_radius=4)
-    pygame.draw.rect(screen, COLOR_PLAY_GREEN if is_playing else COLOR_UI_BORDER, btn_play, width=1, border_radius=4)
-    screen.blit(font_header.render("|| Pause" if is_playing else "> Play", True, COLOR_PLAY_GREEN if is_playing else COLOR_TEXT_MAIN), (btn_play.x + 20, btn_play.y + 10))
+
+    pygame.draw.rect(screen, (30, 50, 35) if is_playing else COLOR_BACKGROUND, btn_static_play, border_radius=4)
+    pygame.draw.rect(screen, COLOR_PLAY_GREEN if is_playing else COLOR_UI_BORDER, btn_static_play, width=1, border_radius=4)
+    screen.blit(font_header.render("|| Static Pause" if is_playing else "> Static Play", True, COLOR_PLAY_GREEN if is_playing else COLOR_TEXT_MAIN), (btn_static_play.x + 10, btn_static_play.y + 10))
+
+    pygame.draw.rect(screen, (35, 40, 60) if is_physics_playing else COLOR_BACKGROUND, btn_physics_play, border_radius=4)
+    pygame.draw.rect(screen, (100, 150, 255) if is_physics_playing else COLOR_UI_BORDER, btn_physics_play, width=1, border_radius=4)
+    screen.blit(font_header.render("[] Stop Dyn" if is_physics_playing else "> Dynamic Play", True, (100, 150, 255) if is_physics_playing else COLOR_TEXT_MAIN), (btn_physics_play.x + 10, btn_physics_play.y + 12))
 
     pygame.draw.rect(screen, (40, 55, 45) if truss.self_weight_enabled else (55, 35, 35), btn_w_toggle, border_radius=4)
     pygame.draw.rect(screen, COLOR_PLAY_GREEN if truss.self_weight_enabled else COLOR_LOAD, btn_w_toggle, width=1, border_radius=4)
@@ -638,7 +693,7 @@ while is_running:
         rbx, rby = camera.to_screen(fb[2], fb[3])
 
     for i, node in enumerate(truss.nodes):
-        if is_playing and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
+        if (is_playing or is_physics_playing) and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
         nx, ny = get_def_pos(i, node)
         
         screen_nx, screen_ny = camera.to_screen(nx, ny)
@@ -695,7 +750,7 @@ while is_running:
     screen.blit(sim_zone_surface, (sim_rect.left, sim_rect.top))
     pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
 
-    if not truss.is_stable:
+    if not truss.is_stable and not is_physics_playing:
         txt = "STRUCTURE UNSTABLE / MECHANISM DETECTED"
         w = font_header.size(txt)[0] + 30
         alert = pygame.Rect(sim_rect.left + (sim_rect.width - w) // 2, sim_rect.top + 20, w, 45)
@@ -744,7 +799,7 @@ while is_running:
             bhud_surface.blit(font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
-    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and truss.is_stable:
+    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and truss.is_stable and not is_physics_playing:
         lines, header_text, is_beam_selected = [], "", selected_beam_idx is not None
         
         if is_beam_selected:
