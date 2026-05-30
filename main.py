@@ -180,6 +180,28 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
     angle = math.atan2(cy - start_y, cx - start_x)
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
+def compute_mechanism_stresses():
+    """For mechanisms where DSM fails, compute stresses from current geometry and physics rest lengths."""
+    if physics_sim is None:
+        return
+    for c in physics_sim.constraints:
+        beam = c.beam
+        if beam.status == "FRACTURED":
+            continue
+        node_a = truss.nodes[beam.node_a]
+        node_b = truss.nodes[beam.node_b]
+        dx = node_b.x - node_a.x
+        dy = node_b.y - node_a.y
+        current_length_px = math.hypot(dx, dy)
+        rest_length_px = c.rest_length
+        if rest_length_px < 1.0:
+            beam.stress = 0.0
+            beam.force = 0.0
+            continue
+        strain = (current_length_px - rest_length_px) / rest_length_px
+        beam.stress = strain * beam.modulus
+        beam.force = beam.stress * beam.area
+
 def get_def_pos(idx, node):
     if is_physics_playing:
         return node.x, node.y
@@ -516,6 +538,10 @@ while is_running:
             if physics_sync_counter >= DYNAMIC_SYNC_INTERVAL:
                 physics_sync_counter = 0
                 solve_truss(truss, gravity_multiplier)
+
+                # For mechanisms where DSM fails, compute stresses from current geometry
+                if not truss.is_stable:
+                    compute_mechanism_stresses()
 
                 # Apply DSM-derived status, yielding and breakage logic
                 for b in truss.beams:
