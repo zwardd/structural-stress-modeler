@@ -38,7 +38,7 @@ class MaterialManager:
     def get_density(material_name):
         """Get density in kg/m³ for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
-        return specs.get("density", 7850)  # Default to Steel density
+        return specs.get("density", 7850)
     
     @staticmethod
     def calculate_area_inertia(profile, dim_w, dim_t):

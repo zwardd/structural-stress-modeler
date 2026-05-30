@@ -71,7 +71,8 @@ class PhysicsSimulation:
 
     def step(self, gravity_mult):
         self.gravity = 9.81 * gravity_mult if self.enable_gravity else 0.0
-        
+        self.constraints = [c for c in self.constraints if c.beam.status != "FRACTURED"]
+
         for _ in range(self.sub_steps):
             for p in self.particles:
                 node = self.truss.nodes[p.node_idx]
@@ -134,7 +135,4 @@ class PhysicsSimulation:
             curr_len = math.sqrt(dx*dx + dy*dy)
             
             if c.rest_length > 1e-6:
-                # Note: stress/force are intentionally NOT set here.
-                # DSM will be used as the single source of truth for
-                # structural stresses and forces during Dynamic Play.
                 strain = (curr_len - c.rest_length) / c.rest_length

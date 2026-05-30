@@ -53,7 +53,6 @@ camera = Camera()
 physics_sim = None
 saved_truss_state = None
 physics_sync_counter = 0
-# How many frames between DSM synchronizations while in Dynamic Play
 DYNAMIC_SYNC_INTERVAL = 8
 
 def trigger_status(text):
@@ -532,18 +531,14 @@ while is_running:
         if physics_sim is not None:
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
-            # Periodically run the DSM solver on the dynamically-updated geometry
-            # and use the DSM results as the authoritative structural state.
             physics_sync_counter += 1
             if physics_sync_counter >= DYNAMIC_SYNC_INTERVAL:
                 physics_sync_counter = 0
                 solve_truss(truss, gravity_multiplier)
 
-                # For mechanisms where DSM fails, compute stresses from current geometry
                 if not truss.is_stable:
                     compute_mechanism_stresses()
 
-                # Apply DSM-derived status, yielding and breakage logic
                 for b in truss.beams:
                     if b.status == "FRACTURED":
                         continue
