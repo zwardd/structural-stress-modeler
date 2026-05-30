@@ -117,9 +117,7 @@ def calculate_utilization(beam):
     return yield_util
 
 def get_stress_color(beam):
-    if is_physics_playing:
-        return (59, 130, 246)
-    if not truss.is_stable:
+    if not truss.is_stable and not is_physics_playing:
         return COLOR_TEXT_MUTED
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return (180, 180, 185)
@@ -229,7 +227,7 @@ def draw_profile_preview(surf, x, y, width, height, beam):
             pygame.draw.circle(surf, (12, 12, 14), (center_x, center_y), max(1, radius // 6))
 
 def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selected):
-    if beam.status != "YIELDING" or beam.force == 0.0 or is_physics_playing:
+    if beam.status != "YIELDING" or beam.force == 0.0:
         if is_selected:
             pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
         pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
@@ -329,7 +327,7 @@ while is_running:
             if event.key == pygame.K_SPACE and not pygame.key.get_pressed()[pygame.K_LALT]:
                 if not is_playing and not is_physics_playing:
                     saved_truss_state = capture_truss_state()
-                    physics_sim = PhysicsSimulation(truss, gravity_mult=1.0)
+                    physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
                     is_physics_playing = True
                     is_optimizing = False
                     active_node_bnd = None
@@ -340,6 +338,7 @@ while is_running:
                     physics_sim = None
                     if saved_truss_state:
                         restore_truss_state(saved_truss_state)
+                    for b in truss.beams: b.reset_status()
                     trigger_status("DYNAMIC SIMULATION RESET")
                 elif is_playing:
                     is_playing = False
@@ -364,6 +363,8 @@ while is_running:
                 elif event.key == pygame.K_d: show_deformed = not show_deformed
                 elif event.key == pygame.K_w:
                     truss.self_weight_enabled = not truss.self_weight_enabled
+                    if is_physics_playing and physics_sim is not None:
+                        physics_sim.enable_gravity = truss.self_weight_enabled
                 elif event.key == pygame.K_v:
                     show_benchmark_hud = not show_benchmark_hud
                     if show_benchmark_hud:
@@ -413,7 +414,7 @@ while is_running:
                     if not is_playing:
                         if not is_physics_playing:
                             saved_truss_state = capture_truss_state()
-                            physics_sim = PhysicsSimulation(truss, gravity_mult=1.0)
+                            physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
                             is_physics_playing = True
                             is_optimizing = False
                             input_active = False
@@ -423,9 +424,12 @@ while is_running:
                             physics_sim = None
                             if saved_truss_state:
                                 restore_truss_state(saved_truss_state)
+                            for b in truss.beams: b.reset_status()
                             trigger_status("DYNAMIC SIMULATION RESET")
                 elif btn_w_toggle.collidepoint(event.pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
+                    if is_physics_playing and physics_sim is not None:
+                        physics_sim.enable_gravity = truss.self_weight_enabled
                 elif btn_optimize.collidepoint(event.pos) and not is_playing and not is_physics_playing:
                     is_optimizing = not is_optimizing
                     if is_optimizing: trigger_status("OPTIMIZATION ENGINE ACTIVE")
@@ -501,8 +505,17 @@ while is_running:
 
     if is_physics_playing:
         if physics_sim is not None:
-            physics_sim.step()
+            physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
+            
+            for b in truss.beams:
+                if b.status == "FRACTURED": continue
+                util = calculate_utilization(b)
+                if util >= 1.0:
+                    b.status = "YIELDING"
+                else:
+                    b.status = "NORMAL"
+                    
     elif is_playing:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
         if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
@@ -595,7 +608,7 @@ while is_running:
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
     screen.blit(fos_label, (15, 375))
     
-    if not truss.is_stable or len(truss.beams) == 0:
+    if len(truss.beams) == 0 or (not truss.is_stable and not is_physics_playing):
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
     elif max_util >= 1.6:
         fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
@@ -700,9 +713,9 @@ while is_running:
         local_nx, local_ny = screen_nx - sim_rect.left, screen_ny - sim_rect.top
         
         total_fx = node.load_x
-        total_fy = node.load_y + (1000.0 * gravity_multiplier if is_playing else 0.0)
+        total_fy = node.load_y + (1000.0 * gravity_multiplier if truss.self_weight_enabled and (is_playing or is_physics_playing) else 0.0)
         
-        if truss.self_weight_enabled and is_playing and gravity_multiplier > 0.0:
+        if truss.self_weight_enabled and (is_playing or is_physics_playing) and gravity_multiplier > 0.0:
             g = 9.81 * gravity_multiplier
             for beam in truss.beams:
                 if beam.status == "FRACTURED": continue
@@ -799,7 +812,7 @@ while is_running:
             bhud_surface.blit(font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
-    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and truss.is_stable and not is_physics_playing:
+    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and (truss.is_stable or is_physics_playing):
         lines, header_text, is_beam_selected = [], "", selected_beam_idx is not None
         
         if is_beam_selected:

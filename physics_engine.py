@@ -1,6 +1,5 @@
 import math
 import numpy as np
-from constants import WORKSPACE_LIMIT
 
 class PhysicsParticle:
     def __init__(self, node_idx, x, y, inv_mass, is_anchor_x, is_anchor_y):
@@ -16,18 +15,21 @@ class PhysicsParticle:
         self.is_anchor_y = is_anchor_y
 
 class PhysicsConstraint:
-    def __init__(self, p1_idx, p2_idx, rest_length):
+    def __init__(self, p1_idx, p2_idx, rest_length, beam):
         self.p1_idx = p1_idx
         self.p2_idx = p2_idx
         self.rest_length = float(rest_length)
+        self.beam = beam
 
 class PhysicsSimulation:
-    def __init__(self, truss_system, gravity_mult=1.0):
+    def __init__(self, truss_system, gravity_mult=1.0, enable_gravity=True):
+        self.truss = truss_system
         self.particles = []
         self.constraints = []
         self.sub_steps = 8
         self.dt = 1.0 / (60.0 * self.sub_steps)
-        self.gravity = 9.81 * gravity_mult
+        self.enable_gravity = enable_gravity
+        self.gravity = 9.81 * gravity_mult if enable_gravity else 0.0
         self.init_simulation(truss_system)
 
     def init_simulation(self, truss):
@@ -64,14 +66,19 @@ class PhysicsSimulation:
             dy = truss.nodes[beam.node_b].y - truss.nodes[beam.node_a].y
             rest_len = math.sqrt(dx*dx + dy*dy)
             
-            c = PhysicsConstraint(beam.node_a, beam.node_b, rest_len)
+            c = PhysicsConstraint(beam.node_a, beam.node_b, rest_len, beam)
             self.constraints.append(c)
 
-    def step(self):
+    def step(self, gravity_mult):
+        self.gravity = 9.81 * gravity_mult if self.enable_gravity else 0.0
+        
         for _ in range(self.sub_steps):
             for p in self.particles:
+                node = self.truss.nodes[p.node_idx]
                 if not p.is_anchor_x:
-                    p.vy += self.gravity * self.dt
+                    p.vx += (node.load_x * p.inv_mass) * self.dt
+                if not p.is_anchor_y:
+                    p.vy += (self.gravity + node.load_y * p.inv_mass) * self.dt
                 
                 p.px = p.x
                 p.py = p.y
@@ -120,3 +127,13 @@ class PhysicsSimulation:
             node = truss.nodes[p.node_idx]
             node.x = p.x
             node.y = p.y
+            
+        for c in self.constraints:
+            dx = truss.nodes[c.p2_idx].x - truss.nodes[c.p1_idx].x
+            dy = truss.nodes[c.p2_idx].y - truss.nodes[c.p1_idx].y
+            curr_len = math.sqrt(dx*dx + dy*dy)
+            
+            if c.rest_length > 1e-6:
+                strain = (curr_len - c.rest_length) / c.rest_length
+                c.beam.stress = strain * c.beam.modulus
+                c.beam.force = c.beam.stress * c.beam.area
