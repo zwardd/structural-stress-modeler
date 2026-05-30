@@ -52,6 +52,9 @@ fading_beams = []
 camera = Camera()
 physics_sim = None
 saved_truss_state = None
+physics_sync_counter = 0
+# How many frames between DSM synchronizations while in Dynamic Play
+DYNAMIC_SYNC_INTERVAL = 8
 
 def trigger_status(text):
     global status_banner_text, status_banner_timer
@@ -507,14 +510,35 @@ while is_running:
         if physics_sim is not None:
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
-            
-            for b in truss.beams:
-                if b.status == "FRACTURED": continue
-                util = calculate_utilization(b)
-                if util >= 1.0:
-                    b.status = "YIELDING"
-                else:
-                    b.status = "NORMAL"
+            # Periodically run the DSM solver on the dynamically-updated geometry
+            # and use the DSM results as the authoritative structural state.
+            physics_sync_counter += 1
+            if physics_sync_counter >= DYNAMIC_SYNC_INTERVAL:
+                physics_sync_counter = 0
+                solve_truss(truss, gravity_multiplier)
+
+                # Apply DSM-derived status, yielding and breakage logic
+                for b in truss.beams:
+                    if b.status == "FRACTURED":
+                        continue
+                    ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
+                    utilization = calculate_utilization(b)
+                    if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
+                        b.status = "FRACTURED"
+                        b.is_broken = True
+                        b.broken_at_gravity = gravity_multiplier
+                        if first_break_gravity is None:
+                            first_break_gravity = gravity_multiplier
+                        ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
+                        bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
+                        mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                        thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
+                        fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
+                        fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
+                        break
+                    elif utilization >= 1.0 and b.status == "NORMAL":
+                        b.status = "YIELDING"
+                        b.broken_at_gravity = gravity_multiplier
                     
     elif is_playing:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
@@ -723,7 +747,7 @@ while is_running:
                     total_fy += (truss.get_beam_length(beam) * beam.area * beam.density * g) / 2.0
             
         draw_force_vector(sim_zone_surface, local_nx, local_ny, total_fx, total_fy, COLOR_LOAD)
-        if is_playing and (abs(node.rx) > 0.1 or abs(node.ry) > 0.1):
+        if (is_playing or is_physics_playing) and (abs(node.rx) > 0.1 or abs(node.ry) > 0.1):
             net_r = math.hypot(node.rx, node.ry)
             dx = node.rx / net_r
             dy = -node.ry / net_r

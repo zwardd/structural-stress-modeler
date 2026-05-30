@@ -134,6 +134,7 @@ class PhysicsSimulation:
             curr_len = math.sqrt(dx*dx + dy*dy)
             
             if c.rest_length > 1e-6:
+                # Note: stress/force are intentionally NOT set here.
+                # DSM will be used as the single source of truth for
+                # structural stresses and forces during Dynamic Play.
                 strain = (curr_len - c.rest_length) / c.rest_length
-                c.beam.stress = strain * c.beam.modulus
-                c.beam.force = c.beam.stress * c.beam.area
