@@ -548,6 +548,8 @@ while is_running:
                         b.status = "FRACTURED"
                         b.is_broken = True
                         b.broken_at_gravity = gravity_multiplier
+                        if physics_sim is not None:
+                            physics_sim.remove_constraints_for_beam(b)
                         if first_break_gravity is None:
                             first_break_gravity = gravity_multiplier
                         ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
@@ -580,6 +582,8 @@ while is_running:
                     b.status = "FRACTURED"
                     b.is_broken = True
                     b.broken_at_gravity = gravity_multiplier
+                    if physics_sim is not None:
+                        physics_sim.remove_constraints_for_beam(b)
                     if first_break_gravity is None: first_break_gravity = gravity_multiplier
                     ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
                     bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
