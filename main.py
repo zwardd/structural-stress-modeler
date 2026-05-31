@@ -2,7 +2,8 @@ import pygame
 import sys
 import math
 import tkinter as tk
-from truss_model import TrussSystem
+import json
+from truss_model import TrussSystem, Node, Beam
 from matrix_solver import solve_truss, calculate_benchmark_metrics
 from constants import *
 from camera import Camera
@@ -52,8 +53,6 @@ fading_beams = []
 camera = Camera()
 physics_sim = None
 saved_truss_state = None
-physics_sync_counter = 0
-DYNAMIC_SYNC_INTERVAL = 8
 
 def trigger_status(text):
     global status_banner_text, status_banner_timer
@@ -67,6 +66,75 @@ def restore_truss_state(state):
     for i, s in enumerate(state):
         truss.nodes[i].x = s["x"]
         truss.nodes[i].y = s["y"]
+
+def run_determinism_test(base_truss, num_runs=3, frames=180):
+    print("\n--- STARTING PHYSICS DETERMINISM TEST ---")
+    state_str = json.dumps({
+        "self_weight_enabled": base_truss.self_weight_enabled,
+        "active_material": base_truss.active_material,
+        "nodes": [n.to_dict() for n in base_truss.nodes],
+        "beams": [b.to_dict() for b in base_truss.beams]
+    })
+    
+    run_histories = []
+    
+    for run_idx in range(num_runs):
+        test_truss = TrussSystem()
+        data = json.loads(state_str)
+        test_truss.self_weight_enabled = data["self_weight_enabled"]
+        test_truss.active_material = data["active_material"]
+        for n_data in data["nodes"]: test_truss.nodes.append(Node.from_dict(n_data))
+        for b_data in data["beams"]: test_truss.beams.append(Beam.from_dict(b_data))
+        
+        sim = PhysicsSimulation(test_truss, gravity_mult=1.0, enable_gravity=test_truss.self_weight_enabled)
+        
+        history = []
+        for frame in range(frames):
+            sim.step(1.0)
+            sim.sync_to_truss(test_truss)
+            
+            for c in sim.constraints:
+                dx = test_truss.nodes[c.p2_idx].x - test_truss.nodes[c.p1_idx].x
+                dy = test_truss.nodes[c.p2_idx].y - test_truss.nodes[c.p1_idx].y
+                curr_len = math.sqrt(dx * dx + dy * dy)
+                if c.rest_length > 1e-6:
+                    strain = (curr_len - c.rest_length) / c.rest_length
+                    c.beam.stress = strain * c.beam.modulus
+                    c.beam.force = c.beam.stress * c.beam.area
+            
+            beams_to_break = []
+            for b_idx, b in enumerate(test_truss.beams):
+                if b.status == "FRACTURED": continue
+                ult = MaterialManager.get_ultimate_stress(b.material)
+                yield_s = MaterialManager.get_yield_stress(b.material)
+                util = abs(b.stress) / yield_s if yield_s > 0 else 0
+                if abs(b.stress) >= ult or util >= 1.6:
+                    beams_to_break.append((b, util, b_idx))
+            
+            beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+            for b, util, b_idx in beams_to_break:
+                b.status = "FRACTURED"
+                sim.remove_constraints_for_beam(b)
+                
+            frame_hash = sum([round(p.x + p.y + p.vx + p.vy, 4) for p in sim.particles]) + sum([1 for b in test_truss.beams if b.status == "FRACTURED"])
+            history.append(frame_hash)
+            
+        run_histories.append(history)
+        print(f"Run {run_idx+1} completed.")
+
+    diverged = False
+    for f in range(frames):
+        val = run_histories[0][f]
+        for r in range(1, num_runs):
+            if run_histories[r][f] != val:
+                print(f"!! DIVERGENCE DETECTED at Frame {f} !! Run 1: {val}, Run {r+1}: {run_histories[r][f]}")
+                diverged = True
+                break
+        if diverged: break
+    
+    if not diverged:
+        print(f"SUCCESS: 100% Deterministic across {num_runs} runs ({frames} frames each).")
+    print("-----------------------------------------\n")
 
 def find_proxy_limit(beam):
     if beam.status != "YIELDING" or beam.force == 0.0:
@@ -180,7 +248,6 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
 def compute_mechanism_stresses():
-    """For mechanisms where DSM fails, compute stresses from current geometry and physics rest lengths."""
     if physics_sim is None:
         return
     for c in physics_sim.constraints:
@@ -367,6 +434,10 @@ while is_running:
                 elif is_playing:
                     is_playing = False
                     trigger_status("STATIC PLAY PAUSED")
+            elif event.key == pygame.K_t and pygame.key.get_mods() & pygame.KMOD_SHIFT:
+                if not is_playing and not is_physics_playing:
+                    trigger_status("RUNNING DETERMINISM TEST (SEE CONSOLE)")
+                    run_determinism_test(truss)
             elif event.key == pygame.K_h:
                 camera.reset()
                 trigger_status("CAMERA RESET TO ORIGIN")
@@ -531,70 +602,94 @@ while is_running:
         if physics_sim is not None:
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
-            physics_sync_counter += 1
-            if physics_sync_counter >= DYNAMIC_SYNC_INTERVAL:
-                physics_sync_counter = 0
-                solve_truss(truss, gravity_multiplier)
 
-                if not truss.is_stable:
-                    compute_mechanism_stresses()
+            beams_to_break = []
+            for b_idx, b in enumerate(truss.beams):
+                if b.status == "FRACTURED":
+                    continue
+                ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
+                utilization = calculate_utilization(b)
+                if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
+                    beams_to_break.append((b, utilization, b_idx))
 
-                for b in truss.beams:
-                    if b.status == "FRACTURED":
-                        continue
-                    ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
-                    utilization = calculate_utilization(b)
-                    if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
-                        b.status = "FRACTURED"
-                        b.is_broken = True
-                        b.broken_at_gravity = gravity_multiplier
-                        if physics_sim is not None:
-                            physics_sim.remove_constraints_for_beam(b)
-                        if first_break_gravity is None:
-                            first_break_gravity = gravity_multiplier
-                        ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
-                        bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
-                        mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                        thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
-                        fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
-                        fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
-                        break
-                    elif utilization >= 1.0 and b.status == "NORMAL":
-                        b.status = "YIELDING"
-                        b.broken_at_gravity = gravity_multiplier
+            beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+
+            for b, util, b_idx in beams_to_break:
+                b.status = "FRACTURED"
+                b.is_broken = True
+                b.broken_at_gravity = gravity_multiplier
+                
+                if physics_sim is not None:
+                    physics_sim.remove_constraints_for_beam(b)
+                if first_break_gravity is None:
+                    first_break_gravity = gravity_multiplier
                     
+                ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
+                bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
+                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
+                fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
+                fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
+                
+            for b in truss.beams:
+                if b.status == "FRACTURED": continue
+                utilization = calculate_utilization(b)
+                if utilization >= 1.0 and b.status == "NORMAL":
+                    b.status = "YIELDING"
+                    b.broken_at_gravity = gravity_multiplier
+                elif utilization < 1.0 and b.status == "YIELDING":
+                    b.status = "NORMAL"
+
     elif is_playing:
         current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
         if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
             gravity_multiplier = first_break_gravity
+            
         for b in truss.beams:
             if b.status != "NORMAL" and b.broken_at_gravity is not None:
                 if gravity_multiplier < b.broken_at_gravity:
                     b.reset_status()
-        if not any(b.status == "FRACTURED" for b in truss.beams): first_break_gravity = None
+                    
+        if not any(b.status == "FRACTURED" for b in truss.beams): 
+            first_break_gravity = None
+            
         solve_truss(truss, gravity_multiplier)
+        
         if truss.is_stable:
-            for b in truss.beams:
+            beams_to_break = []
+            for b_idx, b in enumerate(truss.beams):
                 if b.status == "FRACTURED": continue
                 ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
                 utilization = calculate_utilization(b)
                 if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
-                    b.status = "FRACTURED"
-                    b.is_broken = True
-                    b.broken_at_gravity = gravity_multiplier
-                    if physics_sim is not None:
-                        physics_sim.remove_constraints_for_beam(b)
-                    if first_break_gravity is None: first_break_gravity = gravity_multiplier
-                    ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
-                    bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
-                    mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                    thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
-                    fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
-                    fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
-                    break 
-                elif utilization >= 1.0 and b.status == "NORMAL":
+                    beams_to_break.append((b, utilization, b_idx))
+                    
+            beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
+            
+            for b, util, b_idx in beams_to_break:
+                b.status = "FRACTURED"
+                b.is_broken = True
+                b.broken_at_gravity = gravity_multiplier
+                if physics_sim is not None:
+                    physics_sim.remove_constraints_for_beam(b)
+                if first_break_gravity is None: 
+                    first_break_gravity = gravity_multiplier
+                    
+                ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
+                bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
+                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
+                thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
+                fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
+                fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
+                
+            for b in truss.beams:
+                if b.status == "FRACTURED": continue
+                utilization = calculate_utilization(b)
+                if utilization >= 1.0 and b.status == "NORMAL":
                     b.status = "YIELDING"
                     b.broken_at_gravity = gravity_multiplier
+                elif utilization < 1.0 and b.status == "YIELDING":
+                    b.status = "NORMAL"
     else:
         current_def_scale += (0.0 - current_def_scale) * 0.15
         first_break_gravity = None
@@ -861,7 +956,7 @@ while is_running:
             bhud_surface.blit(font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
-    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and (truss.is_stable or is_physics_playing):
+    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and (truss.is_stable or is_playing or is_physics_playing):
         lines, header_text, is_beam_selected = [], "", selected_beam_idx is not None
         
         if is_beam_selected:
