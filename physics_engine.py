@@ -20,6 +20,7 @@ class PhysicsConstraint:
         self.p2_idx = p2_idx
         self.rest_length = float(rest_length)
         self.beam = beam
+        self.current_strain = 0.0
 
 class PhysicsSimulation:
     def __init__(self, truss_system, gravity_mult=1.0, enable_gravity=True):
@@ -162,6 +163,9 @@ class PhysicsSimulation:
         self.constraints = [c for c in self.constraints if c.beam.status != "FRACTURED"]
         self.constraints.sort(key=lambda c: (min(c.p1_idx, c.p2_idx), max(c.p1_idx, c.p2_idx)))
 
+        for c in self.constraints:
+            c.current_strain = 0.0
+
         for _ in range(self.sub_steps):
             for p in self.particles:
                 node = self.truss.nodes[p.node_idx]
@@ -175,6 +179,13 @@ class PhysicsSimulation:
                     p.x += p.vx * self.dt
                 if not p.is_anchor_y:
                     p.y += p.vy * self.dt
+
+            for c in self.constraints:
+                p1 = self.particles[c.p1_idx]
+                p2 = self.particles[c.p2_idx]
+                dist = math.hypot(p2.x - p1.x, p2.y - p1.y)
+                if c.rest_length > 1e-6:
+                    c.current_strain += ((dist - c.rest_length) / c.rest_length) / self.sub_steps
 
             self.used_constraint_cycles = 0
             for _ in range(self.constraint_cycle_base):
@@ -196,11 +207,7 @@ class PhysicsSimulation:
             node = truss.nodes[p.node_idx]
             node.x = p.x
             node.y = p.y
+            
         for c in self.constraints:
-            dx = truss.nodes[c.p2_idx].x - truss.nodes[c.p1_idx].x
-            dy = truss.nodes[c.p2_idx].y - truss.nodes[c.p1_idx].y
-            curr_len = math.sqrt(dx * dx + dy * dy)
-            if c.rest_length > 1e-6:
-                strain = (curr_len - c.rest_length) / c.rest_length
-                c.beam.stress = strain * c.beam.modulus
-                c.beam.force = c.beam.stress * c.beam.area
+            c.beam.stress = c.current_strain * c.beam.modulus
+            c.beam.force = c.beam.stress * c.beam.area

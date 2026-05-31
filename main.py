@@ -53,6 +53,8 @@ fading_beams = []
 camera = Camera()
 physics_sim = None
 saved_truss_state = None
+physics_sync_counter = 0
+DYNAMIC_SYNC_INTERVAL = 8
 
 def trigger_status(text):
     global status_banner_text, status_banner_timer
@@ -741,7 +743,15 @@ while is_running:
     total_mass, max_util = 0.0, 0.0
     for b in truss.beams:
         if b.status == "FRACTURED": continue
-        total_mass += truss.get_beam_length(b) * b.area * b.density
+        
+        if is_physics_playing and saved_truss_state is not None:
+            na = saved_truss_state[b.node_a]
+            nb = saved_truss_state[b.node_b]
+            length_m = math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]) * 0.0125
+        else:
+            length_m = truss.get_beam_length(b)
+            
+        total_mass += length_m * b.area * b.density
         max_util = max(max_util, calculate_utilization(b))
         
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
@@ -962,7 +972,14 @@ while is_running:
         if is_beam_selected:
             beam = truss.beams[selected_beam_idx]
             header_text = "STRUCTURAL ELEMENT"
-            length_m = truss.get_beam_length(beam) 
+            
+            if is_physics_playing and saved_truss_state is not None:
+                na = saved_truss_state[beam.node_a]
+                nb = saved_truss_state[beam.node_b]
+                length_m = math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]) * 0.0125
+            else:
+                length_m = truss.get_beam_length(beam)
+                
             stress_m_pa = beam.stress / 1e6               
             force_k_n = beam.force / 1000.0               
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
