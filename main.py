@@ -53,8 +53,6 @@ fading_beams = []
 camera = Camera()
 physics_sim = None
 saved_truss_state = None
-physics_sync_counter = 0
-DYNAMIC_SYNC_INTERVAL = 8
 
 def trigger_status(text):
     global status_banner_text, status_banner_timer
@@ -249,26 +247,53 @@ def draw_force_vector(surface, cx, cy, fx, fy, color=COLOR_LOAD):
     angle = math.atan2(cy - start_y, cx - start_x)
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
-def compute_mechanism_stresses():
-    if physics_sim is None:
-        return
-    for c in physics_sim.constraints:
-        beam = c.beam
-        if beam.status == "FRACTURED":
+def compute_dynamic_reactions(truss, gravity_mult):
+    g = 9.81 * gravity_mult
+    
+    for node in truss.nodes:
+        node.rx = 0.0
+        node.ry = 0.0
+        
+    for i, node in enumerate(truss.nodes):
+        if not node.is_anchor_x and not node.is_anchor_y:
             continue
-        node_a = truss.nodes[beam.node_a]
-        node_b = truss.nodes[beam.node_b]
-        dx = node_b.x - node_a.x
-        dy = node_b.y - node_a.y
-        current_length_px = math.hypot(dx, dy)
-        rest_length_px = c.rest_length
-        if rest_length_px < 1.0:
-            beam.stress = 0.0
-            beam.force = 0.0
-            continue
-        strain = (current_length_px - rest_length_px) / rest_length_px
-        beam.stress = strain * beam.modulus
-        beam.force = beam.stress * beam.area
+            
+        fx_net = node.load_x
+        fy_net = node.load_y
+        
+        if truss.self_weight_enabled and gravity_mult > 0.0:
+            for beam in truss.beams:
+                if beam.status == "FRACTURED": continue
+                if beam.node_a == i or beam.node_b == i:
+                    L_m = truss.get_beam_length(beam)
+                    if is_physics_playing and saved_truss_state is not None:
+                        na = saved_truss_state[beam.node_a]
+                        nb = saved_truss_state[beam.node_b]
+                        L_m = math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]) * 0.0125
+                    fy_net += (L_m * beam.area * beam.density * g) / 2.0
+                    
+        for beam in truss.beams:
+            if beam.status == "FRACTURED": continue
+            if beam.node_a == i or beam.node_b == i:
+                na = truss.nodes[beam.node_a]
+                nb = truss.nodes[beam.node_b]
+                dx = nb.x - na.x
+                dy = nb.y - na.y
+                L_px = math.hypot(dx, dy)
+                if L_px > 1e-6:
+                    dir_x = dx / L_px
+                    dir_y = dy / L_px
+                    if beam.node_a == i:
+                        fx_net += beam.force * dir_x
+                        fy_net += beam.force * dir_y
+                    else:
+                        fx_net -= beam.force * dir_x
+                        fy_net -= beam.force * dir_y
+                        
+        if node.is_anchor_x:
+            node.rx = -fx_net
+        if node.is_anchor_y:
+            node.ry = -fy_net
 
 def get_def_pos(idx, node):
     if is_physics_playing:
@@ -604,6 +629,8 @@ while is_running:
         if physics_sim is not None:
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
+            
+            compute_dynamic_reactions(truss, gravity_multiplier)
 
             beams_to_break = []
             for b_idx, b in enumerate(truss.beams):
