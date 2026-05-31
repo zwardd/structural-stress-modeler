@@ -29,7 +29,10 @@ class PhysicsSimulation:
         self.truss = truss_system
         self.particles = []
         self.constraints = []
-        self.sub_steps = 8
+        # Fewer sub-steps but more constraint iterations per sub-step
+        # improves perceived responsiveness while keeping stability.
+        self.sub_steps = 4
+        self.constraint_iters = 2
         self.dt = 1.0 / (60.0 * self.sub_steps)
         self.enable_gravity = enable_gravity
         self.gravity = 9.81 * gravity_mult if enable_gravity else 0.0
@@ -104,67 +107,68 @@ class PhysicsSimulation:
                 if not p.is_anchor_y:
                     p.y += p.vy * self.dt
 
-            # Constraint projection: forward pass
-            for c in self.constraints:
-                p1 = self.particles[c.p1_idx]
-                p2 = self.particles[c.p2_idx]
+            # Constraint projection: multiple forward+reverse passes to improve convergence
+            for _ci in range(self.constraint_iters):
+                # forward pass
+                for c in self.constraints:
+                    p1 = self.particles[c.p1_idx]
+                    p2 = self.particles[c.p2_idx]
 
-                dx = p2.x - p1.x
-                dy = p2.y - p1.y
-                dist = math.sqrt(dx * dx + dy * dy)
-                if dist < 1e-6:
-                    continue
+                    dx = p2.x - p1.x
+                    dy = p2.y - p1.y
+                    dist = math.sqrt(dx * dx + dy * dy)
+                    if dist < 1e-6:
+                        continue
 
-                diff = c.rest_length - dist
-                percent = diff / dist * 0.5
-                offset_x = dx * percent
-                offset_y = dy * percent
+                    diff = c.rest_length - dist
+                    percent = diff / dist * 0.5
+                    offset_x = dx * percent
+                    offset_y = dy * percent
 
-                w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
-                w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
-                w_sum = w1 + w2
-                if w_sum < 1e-8:
-                    continue
+                    w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
+                    w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
+                    w_sum = w1 + w2
+                    if w_sum < 1e-8:
+                        continue
 
-                if not p1.is_anchor_x:
-                    p1.x -= offset_x * (w1 / w_sum)
-                if not p1.is_anchor_y:
-                    p1.y -= offset_y * (w1 / w_sum)
-                if not p2.is_anchor_x:
-                    p2.x += offset_x * (w2 / w_sum)
-                if not p2.is_anchor_y:
-                    p2.y += offset_y * (w2 / w_sum)
+                    if not p1.is_anchor_x:
+                        p1.x -= offset_x * (w1 / w_sum)
+                    if not p1.is_anchor_y:
+                        p1.y -= offset_y * (w1 / w_sum)
+                    if not p2.is_anchor_x:
+                        p2.x += offset_x * (w2 / w_sum)
+                    if not p2.is_anchor_y:
+                        p2.y += offset_y * (w2 / w_sum)
+                # reverse pass to reduce bias
+                for c in reversed(self.constraints):
+                    p1 = self.particles[c.p1_idx]
+                    p2 = self.particles[c.p2_idx]
 
-            # Constraint projection: reverse pass to reduce bias
-            for c in reversed(self.constraints):
-                p1 = self.particles[c.p1_idx]
-                p2 = self.particles[c.p2_idx]
+                    dx = p2.x - p1.x
+                    dy = p2.y - p1.y
+                    dist = math.sqrt(dx * dx + dy * dy)
+                    if dist < 1e-6:
+                        continue
 
-                dx = p2.x - p1.x
-                dy = p2.y - p1.y
-                dist = math.sqrt(dx * dx + dy * dy)
-                if dist < 1e-6:
-                    continue
+                    diff = c.rest_length - dist
+                    percent = diff / dist * 0.5
+                    offset_x = dx * percent
+                    offset_y = dy * percent
 
-                diff = c.rest_length - dist
-                percent = diff / dist * 0.5
-                offset_x = dx * percent
-                offset_y = dy * percent
+                    w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
+                    w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
+                    w_sum = w1 + w2
+                    if w_sum < 1e-8:
+                        continue
 
-                w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
-                w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
-                w_sum = w1 + w2
-                if w_sum < 1e-8:
-                    continue
-
-                if not p1.is_anchor_x:
-                    p1.x -= offset_x * (w1 / w_sum)
-                if not p1.is_anchor_y:
-                    p1.y -= offset_y * (w1 / w_sum)
-                if not p2.is_anchor_x:
-                    p2.x += offset_x * (w2 / w_sum)
-                if not p2.is_anchor_y:
-                    p2.y += offset_y * (w2 / w_sum)
+                    if not p1.is_anchor_x:
+                        p1.x -= offset_x * (w1 / w_sum)
+                    if not p1.is_anchor_y:
+                        p1.y -= offset_y * (w1 / w_sum)
+                    if not p2.is_anchor_x:
+                        p2.x += offset_x * (w2 / w_sum)
+                    if not p2.is_anchor_y:
+                        p2.y += offset_y * (w2 / w_sum)
 
             for p in self.particles:
                 p.vx = (p.x - p.px) / self.dt
