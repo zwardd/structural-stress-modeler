@@ -20,25 +20,20 @@ class PhysicsConstraint:
         self.p2_idx = p2_idx
         self.rest_length = float(rest_length)
         self.beam = beam
-        self.current_strain = 0.0
+        self.lam = 0.0
+        self.frame_force_acc = 0.0
+        self.final_force = 0.0
 
 class PhysicsSimulation:
     def __init__(self, truss_system, gravity_mult=1.0, enable_gravity=True):
         self.truss = truss_system
         self.particles = []
         self.constraints = []
-        self.sub_steps = 4
-        self.constraint_cycle_base = 2
-        self.constraint_cycle_max = 5
-        self.constraint_error_threshold = 0.006
+        self.sub_steps = 12
+        self.iterations = 8
         self.dt = 1.0 / (60.0 * self.sub_steps)
         self.enable_gravity = enable_gravity
         self.gravity = 9.81 * gravity_mult if enable_gravity else 0.0
-        self.max_length_error = 0.0
-        self.avg_length_error = 0.0
-        self.max_rel_length_error = 0.0
-        self.avg_rel_length_error = 0.0
-        self.used_constraint_cycles = 0
         self.init_simulation(truss_system)
 
     def init_simulation(self, truss):
@@ -80,127 +75,90 @@ class PhysicsSimulation:
     def remove_constraints_for_beam(self, beam):
         self.constraints = [c for c in self.constraints if c.beam is not beam and c.beam != beam]
 
-    def project_constraints(self):
-        for c in self.constraints:
-            p1 = self.particles[c.p1_idx]
-            p2 = self.particles[c.p2_idx]
-            dx = p2.x - p1.x
-            dy = p2.y - p1.y
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist < 1e-6:
-                continue
-            diff = c.rest_length - dist
-            percent = diff / dist * 0.5
-            offset_x = dx * percent
-            offset_y = dy * percent
-            w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
-            w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
-            w_sum = w1 + w2
-            if w_sum < 1e-8:
-                continue
-            if not p1.is_anchor_x:
-                p1.x -= offset_x * (w1 / w_sum)
-            if not p1.is_anchor_y:
-                p1.y -= offset_y * (w1 / w_sum)
-            if not p2.is_anchor_x:
-                p2.x += offset_x * (w2 / w_sum)
-            if not p2.is_anchor_y:
-                p2.y += offset_y * (w2 / w_sum)
-
-        for c in reversed(self.constraints):
-            p1 = self.particles[c.p1_idx]
-            p2 = self.particles[c.p2_idx]
-            dx = p2.x - p1.x
-            dy = p2.y - p1.y
-            dist = math.sqrt(dx * dx + dy * dy)
-            if dist < 1e-6:
-                continue
-            diff = c.rest_length - dist
-            percent = diff / dist * 0.5
-            offset_x = dx * percent
-            offset_y = dy * percent
-            w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
-            w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
-            w_sum = w1 + w2
-            if w_sum < 1e-8:
-                continue
-            if not p1.is_anchor_x:
-                p1.x -= offset_x * (w1 / w_sum)
-            if not p1.is_anchor_y:
-                p1.y -= offset_y * (w1 / w_sum)
-            if not p2.is_anchor_x:
-                p2.x += offset_x * (w2 / w_sum)
-            if not p2.is_anchor_y:
-                p2.y += offset_y * (w2 / w_sum)
-
-    def compute_constraint_length_errors(self):
-        total_abs = 0.0
-        total_rel = 0.0
-        count = 0
-        max_abs = 0.0
-        max_rel = 0.0
-        for c in self.constraints:
-            p1 = self.particles[c.p1_idx]
-            p2 = self.particles[c.p2_idx]
-            dx = p2.x - p1.x
-            dy = p2.y - p1.y
-            curr_len = math.sqrt(dx * dx + dy * dy)
-            abs_err = abs(curr_len - c.rest_length)
-            rel_err = abs_err / c.rest_length if c.rest_length > 0 else 0.0
-            total_abs += abs_err
-            total_rel += rel_err
-            max_abs = max(max_abs, abs_err)
-            max_rel = max(max_rel, rel_err)
-            count += 1
-        self.max_length_error = max_abs
-        self.avg_length_error = total_abs / count if count else 0.0
-        self.max_rel_length_error = max_rel
-        self.avg_rel_length_error = total_rel / count if count else 0.0
-        return max_rel
-
     def step(self, gravity_mult):
         self.gravity = 9.81 * gravity_mult if self.enable_gravity else 0.0
         self.constraints = [c for c in self.constraints if c.beam.status != "FRACTURED"]
         self.constraints.sort(key=lambda c: (min(c.p1_idx, c.p2_idx), max(c.p1_idx, c.p2_idx)))
 
+        dt_sq = self.dt * self.dt
+        gravity_px = self.gravity * 80.0
+
         for c in self.constraints:
-            c.current_strain = 0.0
+            c.frame_force_acc = 0.0
 
         for _ in range(self.sub_steps):
+            for c in self.constraints:
+                c.lam = 0.0
+
             for p in self.particles:
                 node = self.truss.nodes[p.node_idx]
+                
+                ax_px = (node.load_x * p.inv_mass) * 80.0
+                ay_px = (node.load_y * p.inv_mass) * 80.0
+                
                 if not p.is_anchor_x:
-                    p.vx += (node.load_x * p.inv_mass) * self.dt
+                    p.vx += ax_px * self.dt
                 if not p.is_anchor_y:
-                    p.vy += (self.gravity + node.load_y * p.inv_mass) * self.dt
+                    p.vy += (gravity_px + ay_px) * self.dt
+                    
                 p.px = p.x
                 p.py = p.y
+                
                 if not p.is_anchor_x:
                     p.x += p.vx * self.dt
                 if not p.is_anchor_y:
                     p.y += p.vy * self.dt
 
-            for c in self.constraints:
-                p1 = self.particles[c.p1_idx]
-                p2 = self.particles[c.p2_idx]
-                dist = math.hypot(p2.x - p1.x, p2.y - p1.y)
-                if c.rest_length > 1e-6:
-                    c.current_strain += ((dist - c.rest_length) / c.rest_length) / self.sub_steps
-
-            self.used_constraint_cycles = 0
-            for _ in range(self.constraint_cycle_base):
-                self.project_constraints()
-                self.used_constraint_cycles += 1
-
-            current_error = self.compute_constraint_length_errors()
-            while current_error > self.constraint_error_threshold and self.used_constraint_cycles < self.constraint_cycle_max:
-                self.project_constraints()
-                self.used_constraint_cycles += 1
-                current_error = self.compute_constraint_length_errors()
+            for _ in range(self.iterations):
+                for c in self.constraints:
+                    p1 = self.particles[c.p1_idx]
+                    p2 = self.particles[c.p2_idx]
+                    
+                    dx_px = p2.x - p1.x
+                    dy_px = p2.y - p1.y
+                    dist_px = math.hypot(dx_px, dy_px)
+                    
+                    if dist_px < 1e-6:
+                        continue
+                        
+                    dist_m = dist_px * 0.0125
+                    rest_m = c.rest_length * 0.0125
+                    C_m = dist_m - rest_m
+                    
+                    w1 = 0.0 if p1.is_anchor_x and p1.is_anchor_y else p1.inv_mass
+                    w2 = 0.0 if p2.is_anchor_x and p2.is_anchor_y else p2.inv_mass
+                    w_sum = w1 + w2
+                    
+                    if w_sum < 1e-10:
+                        continue
+                    
+                    k = (c.beam.modulus * c.beam.area) / rest_m if rest_m > 1e-6 else 1e9
+                    alpha = 1.0 / k
+                    alpha_tilde = alpha / dt_sq
+                    
+                    delta_lam = (-C_m - alpha_tilde * c.lam) / (w_sum + alpha_tilde)
+                    c.lam += delta_lam
+                    
+                    corr_px_1 = (-w1 * delta_lam) * 80.0
+                    corr_px_2 = (w2 * delta_lam) * 80.0
+                    
+                    nx = dx_px / dist_px
+                    ny = dy_px / dist_px
+                    
+                    if not p1.is_anchor_x: p1.x += corr_px_1 * nx
+                    if not p1.is_anchor_y: p1.y += corr_px_1 * ny
+                    if not p2.is_anchor_x: p2.x += corr_px_2 * nx
+                    if not p2.is_anchor_y: p2.y += corr_px_2 * ny
 
             for p in self.particles:
                 p.vx = (p.x - p.px) / self.dt
                 p.vy = (p.y - p.py) / self.dt
+
+            for c in self.constraints:
+                c.frame_force_acc += (-c.lam / dt_sq)
+
+        for c in self.constraints:
+            c.final_force = c.frame_force_acc / self.sub_steps
 
     def sync_to_truss(self, truss):
         for p in self.particles:
@@ -209,5 +167,5 @@ class PhysicsSimulation:
             node.y = p.y
             
         for c in self.constraints:
-            c.beam.stress = c.current_strain * c.beam.modulus
-            c.beam.force = c.beam.stress * c.beam.area
+            c.beam.force = c.final_force
+            c.beam.stress = c.beam.force / c.beam.area
