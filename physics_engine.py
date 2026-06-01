@@ -110,6 +110,9 @@ class PhysicsSimulation:
                     p.y += p.vy * self.dt
 
             for _ in range(self.iterations):
+                correction_x = [0.0 for _ in self.particles]
+                correction_y = [0.0 for _ in self.particles]
+
                 for c in self.constraints:
                     p1 = self.particles[c.p1_idx]
                     p2 = self.particles[c.p2_idx]
@@ -145,10 +148,18 @@ class PhysicsSimulation:
                     nx = dx_px / dist_px
                     ny = dy_px / dist_px
                     
-                    if not p1.is_anchor_x: p1.x += corr_px_1 * nx
-                    if not p1.is_anchor_y: p1.y += corr_px_1 * ny
-                    if not p2.is_anchor_x: p2.x += corr_px_2 * nx
-                    if not p2.is_anchor_y: p2.y += corr_px_2 * ny
+                    if not p1.is_anchor_x:
+                        correction_x[c.p1_idx] += corr_px_1 * nx
+                    if not p1.is_anchor_y:
+                        correction_y[c.p1_idx] += corr_px_1 * ny
+                    if not p2.is_anchor_x:
+                        correction_x[c.p2_idx] += corr_px_2 * nx
+                    if not p2.is_anchor_y:
+                        correction_y[c.p2_idx] += corr_px_2 * ny
+
+                for i, p in enumerate(self.particles):
+                    p.x += correction_x[i]
+                    p.y += correction_y[i]
 
             for p in self.particles:
                 p.vx = (p.x - p.px) / self.dt
