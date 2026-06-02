@@ -866,15 +866,21 @@ while is_running:
         ax, ay = get_def_pos(beam.node_a, truss.nodes[beam.node_a])
         bx, by = get_def_pos(beam.node_b, truss.nodes[beam.node_b])
 
-        screen_ax, screen_ay = camera.to_screen(ax, ay)
-        screen_bx, screen_by = camera.to_screen(bx, by)
-        local_ax, local_ay = round(screen_ax - sim_rect.left), round(screen_ay - sim_rect.top)
-        local_bx, local_by = round(screen_bx - sim_rect.left), round(screen_by - sim_rect.top)
+        sx, sy = camera.to_screen(ax, ay)
+        local_ax = round(sx-sim_rect.left)
+        local_ay = round(sy-sim_rect.top)
+        sx, sy = camera.to_screen(bx, by)
+        local_bx = round(sx-sim_rect.left)
+        local_by = round(sy-sim_rect.top)
 
         if show_deformed and truss.displacements is None and truss.is_stable and is_playing:
-            raw_ax, raw_ay = camera.to_screen(truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y)
-            raw_bx, raw_by = camera.to_screen(truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y)
-            pygame.draw.line(sim_zone_surface, (45, 45, 50), (round(raw_ax - sim_rect.left), round(raw_ay - sim_rect.top)), (round(raw_bx - sim_rect.left), round(raw_by - sim_rect.top)), 1)
+            sx, sy = camera.to_screen(truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y)
+            raw_ax = round(sx-sim_rect.left)
+            raw_ay = round(sy-sim_rect.top)
+            sx, sy = camera.to_screen(truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y)
+            raw_bx = round(sx-sim_rect.left)
+            raw_by = round(sy-sim_rect.top)
+            pygame.draw.line(sim_zone_surface, (45, 45, 50), (raw_ax, raw_ay), (raw_bx, raw_by), 1)
         thickness_pixels = max(1, int(max(2, min(16, int(beam.dim_w * 140.0))) * camera.zoom_scale))
         draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, get_stress_color(beam), i == selected_beam_idx)
 
@@ -888,10 +894,11 @@ while is_running:
     for i, node in enumerate(truss.nodes):
         if (is_playing or is_physics_playing) and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
         nx, ny = get_def_pos(i, node)
-        
-        screen_nx, screen_ny = camera.to_screen(nx, ny)
-        local_nx, local_ny = round(screen_nx - sim_rect.left), round(screen_ny - sim_rect.top)
-        
+       
+        sx, sy = camera.to_screen(nx, ny)
+        local_nx = round(sx-sim_rect.left)
+        local_ny = round(sy-sim_rect.top)
+
         total_fx = node.load_x
         total_fy = node.load_y + (1000.0 * gravity_multiplier if truss.self_weight_enabled and (is_playing or is_physics_playing) else 0.0)
         
