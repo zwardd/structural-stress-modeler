@@ -30,15 +30,11 @@ selected_node_idx = None
 selected_beam_idx = None 
 
 current_mode = "SELECT" 
-is_playing = False       
 is_physics_playing = False
 is_optimizing = False
 allow_profile_switching = True
 grid_enabled = True
-show_deformed = True
 gravity_multiplier = 0.0
-current_def_scale = 0.0
-last_gravity_multiplier = 0.0
 first_break_gravity = None  
 show_benchmark_hud = False
 
@@ -187,8 +183,6 @@ def calculate_utilization(beam):
     return yield_util
 
 def get_stress_color(beam):
-    if not truss.is_stable and not is_physics_playing:
-        return COLOR_TEXT_MUTED
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return (180, 180, 185)
     if beam.status == "YIELDING":
@@ -295,15 +289,6 @@ def compute_dynamic_reactions(truss, gravity_mult):
         if node.is_anchor_y:
             node.ry = -fy_net
 
-def get_def_pos(idx, node):
-    if is_physics_playing:
-        return node.x, node.y
-    if truss.displacements is None or not show_deformed or not truss.is_stable:
-        return node.x, node.y
-    dx = truss.displacements[idx * 2] * current_def_scale
-    dy = -truss.displacements[idx * 2 + 1] * current_def_scale
-    return node.x + dx, node.y + dy
-
 def draw_profile_preview(surf, x, y, width, height, beam):
     pygame.draw.rect(surf, (12, 12, 14), (x, y, width, height), border_radius=4)
     pygame.draw.rect(surf, COLOR_UI_BORDER, (x, y, width, height), width=1, border_radius=4)
@@ -389,11 +374,10 @@ while is_running:
     btn_beam         = pygame.Rect(15, 170, 110, 35)
     btn_load         = pygame.Rect(15, 215, 110, 35)
     btn_benchmark    = pygame.Rect(15, 260, 110, 35)
-    btn_static_play  = pygame.Rect(15, 430, 110, 35)
-    btn_physics_play = pygame.Rect(15, 475, 110, 40)
-    btn_w_toggle     = pygame.Rect(15, 525, 110, 30)
-    btn_optimize     = pygame.Rect(15, 565, 110, 35)
-    chk_profile      = pygame.Rect(15, 610, 14, 14)
+    btn_physics_play = pygame.Rect(15, 430, 110, 40)
+    btn_w_toggle     = pygame.Rect(15, 480, 110, 30)
+    btn_optimize     = pygame.Rect(15, 520, 110, 35)
+    chk_profile      = pygame.Rect(15, 565, 14, 14)
 
     mouse_pos = pygame.mouse.get_pos()
 
@@ -422,7 +406,7 @@ while is_running:
                 continue
 
             ctrl_pressed = pygame.key.get_pressed()[pygame.K_LCTRL] or pygame.key.get_pressed()[pygame.K_RCTRL]
-            if ctrl_pressed and not is_playing and not is_physics_playing:
+            if ctrl_pressed and not is_physics_playing:
                 if event.key == pygame.K_s:
                     status = save_project_dialog(truss)
                     if status:
@@ -442,8 +426,8 @@ while is_running:
                         trigger_status(status)
                     continue
 
-            if event.key == pygame.K_SPACE and not pygame.key.get_pressed()[pygame.K_LALT]:
-                if not is_playing and not is_physics_playing:
+            if event.key == pygame.K_SPACE and not pygame.key.get_mods() & pygame.KMOD_ALT:
+                if not is_physics_playing:
                     saved_truss_state = capture_truss_state()
                     physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
                     is_physics_playing = True
@@ -451,18 +435,15 @@ while is_running:
                     active_node_bnd = None
                     input_active = False
                     trigger_status("DYNAMIC PLAY MODE ACTIVE")
-                elif is_physics_playing:
+                else:
                     is_physics_playing = False
                     physics_sim = None
                     if saved_truss_state:
                         restore_truss_state(saved_truss_state)
                     for b in truss.beams: b.reset_status()
                     trigger_status("DYNAMIC SIMULATION RESET")
-                elif is_playing:
-                    is_playing = False
-                    trigger_status("STATIC PLAY PAUSED")
             elif event.key == pygame.K_t and pygame.key.get_mods() & pygame.KMOD_SHIFT:
-                if not is_playing and not is_physics_playing:
+                if not is_physics_playing:
                     trigger_status("RUNNING DETERMINISM TEST (SEE CONSOLE)")
                     run_determinism_test(truss)
             elif event.key == pygame.K_h:
@@ -473,7 +454,7 @@ while is_running:
                 else: gravity_multiplier = min(100.0, gravity_multiplier + 0.5)
             elif event.key == pygame.K_MINUS: gravity_multiplier = max(0.0, gravity_multiplier - 0.5)
                 
-            if not is_playing and not is_physics_playing:
+            if not is_physics_playing:
                 if event.key == pygame.K_r:
                     truss.clear()
                     active_node_bnd, selected_node_idx, selected_beam_idx = None, None, None
@@ -482,7 +463,6 @@ while is_running:
                     input_active, show_benchmark_hud, is_optimizing = False, False, False
                     camera.reset()
                 elif event.key == pygame.K_g: grid_enabled = not grid_enabled
-                elif event.key == pygame.K_d: show_deformed = not show_deformed
                 elif event.key == pygame.K_w:
                     truss.self_weight_enabled = not truss.self_weight_enabled
                     if is_physics_playing and physics_sim is not None:
@@ -527,42 +507,36 @@ while is_running:
 
         elif event.type == pygame.MOUSEBUTTONDOWN:
             if sidebar_rect.collidepoint(event.pos):
-                if btn_static_play.collidepoint(event.pos):
+                if btn_physics_play.collidepoint(event.pos):
                     if not is_physics_playing:
-                        is_playing = not is_playing
+                        saved_truss_state = capture_truss_state()
+                        physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
+                        is_physics_playing = True
                         is_optimizing = False
                         input_active = False
-                elif btn_physics_play.collidepoint(event.pos):
-                    if not is_playing:
-                        if not is_physics_playing:
-                            saved_truss_state = capture_truss_state()
-                            physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
-                            is_physics_playing = True
-                            is_optimizing = False
-                            input_active = False
-                            trigger_status("DYNAMIC PLAY MODE ACTIVE")
-                        else:
-                            is_physics_playing = False
-                            physics_sim = None
-                            if saved_truss_state:
-                                restore_truss_state(saved_truss_state)
-                            for b in truss.beams: b.reset_status()
-                            trigger_status("DYNAMIC SIMULATION RESET")
+                        trigger_status("DYNAMIC PLAY MODE ACTIVE")
+                    else:
+                        is_physics_playing = False
+                        physics_sim = None
+                        if saved_truss_state:
+                            restore_truss_state(saved_truss_state)
+                        for b in truss.beams: b.reset_status()
+                        trigger_status("DYNAMIC SIMULATION RESET")
                 elif btn_w_toggle.collidepoint(event.pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
                     if is_physics_playing and physics_sim is not None:
                         physics_sim.enable_gravity = truss.self_weight_enabled
-                elif btn_optimize.collidepoint(event.pos) and not is_playing and not is_physics_playing:
+                elif btn_optimize.collidepoint(event.pos) and not is_physics_playing:
                     is_optimizing = not is_optimizing
                     if is_optimizing: trigger_status("OPTIMIZATION ENGINE ACTIVE")
                     else: trigger_status("OPTIMIZATION HALTED")
                 elif chk_profile.inflate(10, 10).collidepoint(event.pos):
                     allow_profile_switching = not allow_profile_switching
-                elif btn_select.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "SELECT", False
-                elif btn_node.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "NODE", False
-                elif btn_beam.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "BEAM", False
-                elif btn_load.collidepoint(event.pos) and not is_playing and not is_physics_playing: current_mode, input_active = "LOAD", False
-                elif btn_benchmark.collidepoint(event.pos) and not is_playing and not is_physics_playing:
+                elif btn_select.collidepoint(event.pos) and not is_physics_playing: current_mode, input_active = "SELECT", False
+                elif btn_node.collidepoint(event.pos) and not is_physics_playing: current_mode, input_active = "NODE", False
+                elif btn_beam.collidepoint(event.pos) and not is_physics_playing: current_mode, input_active = "BEAM", False
+                elif btn_load.collidepoint(event.pos) and not is_physics_playing: current_mode, input_active = "LOAD", False
+                elif btn_benchmark.collidepoint(event.pos) and not is_physics_playing:
                     show_benchmark_hud = not show_benchmark_hud
                     if show_benchmark_hud:
                         truss.load_benchmark_case()
@@ -616,7 +590,7 @@ while is_running:
 
     camera.update(mouse_pos)
 
-    if selected_node_idx is not None and current_mode == "SELECT" and not is_playing and not is_physics_playing and not input_active:
+    if selected_node_idx is not None and current_mode == "SELECT" and not is_physics_playing and not input_active:
         keys = pygame.key.get_pressed()
         if keys[pygame.K_UP] or keys[pygame.K_DOWN] or keys[pygame.K_LEFT] or keys[pygame.K_RIGHT]:
             first_break_gravity, show_benchmark_hud = None, False
@@ -653,8 +627,8 @@ while is_running:
                 if first_break_gravity is None:
                     first_break_gravity = gravity_multiplier
                     
-                ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
-                bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
+                ax, ay = truss.nodes[b.node_a].x, truss.nodes[b.node_a].y
+                bx, by = truss.nodes[b.node_b].x, truss.nodes[b.node_b].y
                 mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
                 thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
                 fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
@@ -669,58 +643,7 @@ while is_running:
                 elif utilization < 1.0 and b.status == "YIELDING":
                     b.status = "NORMAL"
 
-    elif is_playing:
-        current_def_scale += (TARGET_DEF_SCALE - current_def_scale) * 0.08
-        if first_break_gravity is not None and gravity_multiplier > first_break_gravity:
-            gravity_multiplier = first_break_gravity
-            
-        for b in truss.beams:
-            if b.status != "NORMAL" and b.broken_at_gravity is not None:
-                if gravity_multiplier < b.broken_at_gravity:
-                    b.reset_status()
-                    
-        if not any(b.status == "FRACTURED" for b in truss.beams): 
-            first_break_gravity = None
-            
-        solve_truss(truss, gravity_multiplier)
-        
-        if truss.is_stable:
-            beams_to_break = []
-            for b_idx, b in enumerate(truss.beams):
-                if b.status == "FRACTURED": continue
-                ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
-                utilization = calculate_utilization(b)
-                if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
-                    beams_to_break.append((b, utilization, b_idx))
-                    
-            beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
-            
-            for b, util, b_idx in beams_to_break:
-                b.status = "FRACTURED"
-                b.is_broken = True
-                b.broken_at_gravity = gravity_multiplier
-                if physics_sim is not None:
-                    physics_sim.remove_constraints_for_beam(b)
-                if first_break_gravity is None: 
-                    first_break_gravity = gravity_multiplier
-                    
-                ax, ay = get_def_pos(b.node_a, truss.nodes[b.node_a])
-                bx, by = get_def_pos(b.node_b, truss.nodes[b.node_b])
-                mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                thick = max(2, min(14, int((b.area / 2.5e-3) * 4.0)))
-                fading_beams.append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
-                fading_beams.append([mx + 2, my, bx, by, thick, 1.0, -1.5])
-                
-            for b in truss.beams:
-                if b.status == "FRACTURED": continue
-                utilization = calculate_utilization(b)
-                if utilization >= 1.0 and b.status == "NORMAL":
-                    b.status = "YIELDING"
-                    b.broken_at_gravity = gravity_multiplier
-                elif utilization < 1.0 and b.status == "YIELDING":
-                    b.status = "NORMAL"
     else:
-        current_def_scale += (0.0 - current_def_scale) * 0.15
         first_break_gravity = None
         if is_optimizing:
             if not truss.is_stable or len(truss.beams) == 0:
@@ -737,8 +660,6 @@ while is_running:
             for b in truss.beams:
                 b.reset_status()
             solve_truss(truss, 0.0)
-
-    last_gravity_multiplier = gravity_multiplier
 
     for fb in fading_beams[:]:
         fb[5] -= 0.04  
@@ -758,10 +679,10 @@ while is_running:
         (btn_load, "4. + Load", "LOAD")
     ]
     for btn, label, mode in modes_list:
-        pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_playing and not is_physics_playing else COLOR_BACKGROUND, btn, border_radius=4)
+        pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and not is_physics_playing else COLOR_BACKGROUND, btn, border_radius=4)
         screen.blit(font_body.render(label, True, COLOR_TEXT_MAIN), (btn.x + 12, btn.y + 10))
 
-    pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and not is_playing and not is_physics_playing else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
+    pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and not is_physics_playing else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
     screen.blit(font_body.render("5. Benchmark", True, COLOR_TEXT_MAIN), (btn_benchmark.x + 12, btn_benchmark.y + 10))
 
     pygame.draw.line(screen, COLOR_UI_BORDER, (10, 310), (130, 310), 1)
@@ -789,7 +710,7 @@ while is_running:
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
     screen.blit(fos_label, (15, 375))
     
-    if len(truss.beams) == 0 or (not truss.is_stable and not is_physics_playing):
+    if len(truss.beams) == 0:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
     elif max_util >= 1.6:
         fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
@@ -802,10 +723,6 @@ while is_running:
     screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 373))
 
     pygame.draw.line(screen, COLOR_UI_BORDER, (10, 410), (130, 410), 1)
-
-    pygame.draw.rect(screen, (30, 50, 35) if is_playing else COLOR_BACKGROUND, btn_static_play, border_radius=4)
-    pygame.draw.rect(screen, COLOR_PLAY_GREEN if is_playing else COLOR_UI_BORDER, btn_static_play, width=1, border_radius=4)
-    screen.blit(font_header.render("|| Static Pause" if is_playing else "> Static Play", True, COLOR_PLAY_GREEN if is_playing else COLOR_TEXT_MAIN), (btn_static_play.x + 10, btn_static_play.y + 10))
 
     pygame.draw.rect(screen, (35, 40, 60) if is_physics_playing else COLOR_BACKGROUND, btn_physics_play, border_radius=4)
     pygame.draw.rect(screen, (100, 150, 255) if is_physics_playing else COLOR_UI_BORDER, btn_physics_play, width=1, border_radius=4)
@@ -863,8 +780,8 @@ while is_running:
 
     for i, beam in enumerate(truss.beams):
         if beam.status == "FRACTURED": continue
-        ax, ay = get_def_pos(beam.node_a, truss.nodes[beam.node_a])
-        bx, by = get_def_pos(beam.node_b, truss.nodes[beam.node_b])
+        ax, ay = truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y
+        bx, by = truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y
 
         sx, sy = camera.to_screen(ax, ay)
         local_ax = round(sx-sim_rect.left)
@@ -873,14 +790,6 @@ while is_running:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        if show_deformed and truss.displacements is None and truss.is_stable and is_playing:
-            sx, sy = camera.to_screen(truss.nodes[beam.node_a].x, truss.nodes[beam.node_a].y)
-            raw_ax = round(sx-sim_rect.left)
-            raw_ay = round(sy-sim_rect.top)
-            sx, sy = camera.to_screen(truss.nodes[beam.node_b].x, truss.nodes[beam.node_b].y)
-            raw_bx = round(sx-sim_rect.left)
-            raw_by = round(sy-sim_rect.top)
-            pygame.draw.line(sim_zone_surface, (45, 45, 50), (raw_ax, raw_ay), (raw_bx, raw_by), 1)
         thickness_pixels = max(1, int(max(2, min(16, int(beam.dim_w * 140.0))) * camera.zoom_scale))
         draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, get_stress_color(beam), i == selected_beam_idx)
 
@@ -892,17 +801,17 @@ while is_running:
         rbx, rby = camera.to_screen(fb[2], fb[3])
 
     for i, node in enumerate(truss.nodes):
-        if (is_playing or is_physics_playing) and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
-        nx, ny = get_def_pos(i, node)
+        if is_physics_playing and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
+        nx, ny = node.x, node.y
        
         sx, sy = camera.to_screen(nx, ny)
         local_nx = round(sx-sim_rect.left)
         local_ny = round(sy-sim_rect.top)
 
         total_fx = node.load_x
-        total_fy = node.load_y + (1000.0 * gravity_multiplier if truss.self_weight_enabled and (is_playing or is_physics_playing) else 0.0)
+        total_fy = node.load_y + (1000.0 * gravity_multiplier if truss.self_weight_enabled and is_physics_playing else 0.0)
         
-        if truss.self_weight_enabled and (is_playing or is_physics_playing) and gravity_multiplier > 0.0:
+        if truss.self_weight_enabled and is_physics_playing and gravity_multiplier > 0.0:
             g = 9.81 * gravity_multiplier
             for beam in truss.beams:
                 if beam.status == "FRACTURED": continue
@@ -910,7 +819,7 @@ while is_running:
                     total_fy += (truss.get_beam_length(beam) * beam.area * beam.density * g) / 2.0
             
         draw_force_vector(sim_zone_surface, local_nx, local_ny, total_fx, total_fy, COLOR_LOAD)
-        if (is_playing or is_physics_playing) and (abs(node.rx) > 0.1 or abs(node.ry) > 0.1):
+        if is_physics_playing and (abs(node.rx) > 0.1 or abs(node.ry) > 0.1):
             net_r = math.hypot(node.rx, node.ry)
             dx = node.rx / net_r
             dy = -node.ry / net_r
@@ -949,14 +858,6 @@ while is_running:
 
     screen.blit(sim_zone_surface, (sim_rect.left, sim_rect.top))
     pygame.draw.rect(screen, COLOR_UI_BORDER, sim_rect, width=2, border_radius=8)
-
-    if not truss.is_stable and not is_physics_playing:
-        txt = "STRUCTURE UNSTABLE / MECHANISM DETECTED"
-        w = font_header.size(txt)[0] + 30
-        alert = pygame.Rect(sim_rect.left + (sim_rect.width - w) // 2, sim_rect.top + 20, w, 45)
-        pygame.draw.rect(screen, (127, 29, 29, 230), alert, border_radius=6)
-        pygame.draw.rect(screen, COLOR_LOAD, alert, width=1, border_radius=6)
-        screen.blit(font_header.render(txt, True, COLOR_HIGHLIGHT), (alert.x + 15, alert.y + 14))
 
     if show_benchmark_hud and truss.is_stable:
         metrics = calculate_benchmark_metrics(truss)
@@ -999,7 +900,7 @@ while is_running:
             bhud_surface.blit(font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
-    if ((selected_node_idx is not None) or (selected_beam_idx is not None)) and (truss.is_stable or is_playing or is_physics_playing):
+    if ((selected_node_idx is not None) or (selected_beam_idx is not None)):
         lines, header_text, is_beam_selected = [], "", selected_beam_idx is not None
         
         if is_beam_selected:
@@ -1029,7 +930,7 @@ while is_running:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
             support_str = "Pin Support" if node.is_anchor_x and node.is_anchor_y else ("Roller Support" if node.is_anchor_y else "Free Joint")
-            effective_y = node.load_y + (1000.0 * gravity_multiplier if is_playing else 0.0)
+            effective_y = node.load_y
             net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
             lines = [f"Type: {support_str}", f"Coords: ({round(node.x)}, {round(node.y)})", f"Net Load: {net_magnitude:.1f} kN", f"Load X: {node.load_x / 1000.0:.1f} kN", f"Load Y: {effective_y / 1000.0:.1f} kN"]
             if node.is_anchor_x or node.is_anchor_y:
@@ -1113,7 +1014,7 @@ while is_running:
     grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
-    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | DEFORM DISPLAY: {'ON' if show_deformed else 'OFF'} [D] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
+    screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
     screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle | Scroll Wheel Zoom | Mid-Click Drag Pan | [H] Home Cam", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()

@@ -23,7 +23,6 @@ class Camera:
         cy = sim_rect.top + sim_rect.height / 2
         scr_x = cx + (sim_x - cx) * self.zoom_scale + self.pan_x
         scr_y = cy + (sim_y - cy) * self.zoom_scale + self.pan_y
-        # Return floats to avoid early integer quantization of sub-pixel motion.
         return scr_x, scr_y
 
     def to_sim(self, screen_x, screen_y):
