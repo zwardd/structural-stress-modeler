@@ -34,6 +34,7 @@ is_physics_playing = False
 is_optimizing = False
 allow_profile_switching = True
 grid_enabled = True
+trails_enabled = False
 gravity_multiplier = 0.0
 first_break_gravity = None  
 show_benchmark_hud = False
@@ -404,7 +405,8 @@ while is_running:
     btn_physics_play = pygame.Rect(15, 480, 110, 40)
     btn_w_toggle     = pygame.Rect(15, 530, 110, 30)
     btn_optimize     = pygame.Rect(15, 570, 110, 35)
-    chk_profile      = pygame.Rect(15, 615, 14, 14)
+    btn_trails       = pygame.Rect(15, 615, 110, 30)
+    chk_profile      = pygame.Rect(15, 655, 14, 14)
 
     mouse_pos = pygame.mouse.get_pos()
 
@@ -579,6 +581,8 @@ while is_running:
                     is_optimizing = not is_optimizing
                     if is_optimizing: trigger_status("OPTIMIZATION ENGINE ACTIVE")
                     else: trigger_status("OPTIMIZATION HALTED")
+                elif btn_trails.collidepoint(event.pos):
+                    trails_enabled = not trails_enabled
                 elif chk_profile.inflate(10, 10).collidepoint(event.pos):
                     allow_profile_switching = not allow_profile_switching
                 elif btn_select.collidepoint(event.pos) and not is_physics_playing: current_mode, input_active = "SELECT", False
@@ -618,7 +622,7 @@ while is_running:
                             if b.status == "FRACTURED": continue
                             if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < (8 / camera.zoom_scale):
                                 selected_beam_idx = i
-                elif current_mode == "NODE" and clicked_node_idx is None:
+                elif current_mode == "NODE":
                     sim_mouse_x = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_x))
                     sim_mouse_y = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_y))
                     truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=grid_enabled, grid_size=GRID_SIZE)
@@ -654,6 +658,11 @@ while is_running:
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
             
+            for node in truss.nodes:
+                node.trail.append((node.x, node.y))
+                if len(node.trail) > 200:
+                    node.trail.pop(0)
+                    
             compute_dynamic_reactions(truss, gravity_multiplier)
 
             beams_to_break = []
@@ -662,9 +671,14 @@ while is_running:
             
             for b_idx, b in enumerate(truss.beams):
                 if b.status == "FRACTURED":
+                    b.history.append(0.0)
+                    if len(b.history) > 300: b.history.pop(0)
                     continue
                 ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
                 utilization = calculate_utilization(b)
+                
+                b.history.append(utilization * 100.0)
+                if len(b.history) > 300: b.history.pop(0)
                 
                 na = truss.nodes[b.node_a]
                 nb = truss.nodes[b.node_b]
@@ -842,6 +856,11 @@ while is_running:
     pygame.draw.rect(screen, COLOR_UI_BORDER, btn_optimize, width=1, border_radius=4)
     screen.blit(font_header.render("OPTIMIZE", True, COLOR_TEXT_MAIN if is_optimizing else COLOR_TEXT_MUTED), (btn_optimize.x + 18, btn_optimize.y + 9))
 
+    pygame.draw.rect(screen, (40, 55, 45) if trails_enabled else (55, 35, 35), btn_trails, border_radius=4)
+    pygame.draw.rect(screen, COLOR_PLAY_GREEN if trails_enabled else COLOR_LOAD, btn_trails, width=1, border_radius=4)
+    t_label = "Trails: ON" if trails_enabled else "Trails: OFF"
+    screen.blit(font_body.render(t_label, True, COLOR_TEXT_MAIN), (btn_trails.x + 16, btn_trails.y + 6))
+
     pygame.draw.rect(screen, (10, 10, 12), chk_profile, border_radius=2)
     pygame.draw.rect(screen, COLOR_UI_BORDER, chk_profile, width=1, border_radius=2)
     if allow_profile_switching:
@@ -903,6 +922,25 @@ while is_running:
 
         rax, ray = camera.to_screen(fb[0], fb[1])
         rbx, rby = camera.to_screen(fb[2], fb[3])
+
+    if trails_enabled:
+        trail_thickness = max(1, int(1.5 * camera.zoom_scale))
+        for node in truss.nodes:
+            if len(node.trail) > 1:
+                for t_idx in range(len(node.trail) - 1):
+                    p1 = node.trail[t_idx]
+                    p2 = node.trail[t_idx+1]
+                    sx1, sy1 = camera.to_screen(p1[0], p1[1])
+                    sx2, sy2 = camera.to_screen(p2[0], p2[1])
+                    lx1 = round(sx1 - sim_rect.left)
+                    ly1 = round(sy1 - sim_rect.top)
+                    lx2 = round(sx2 - sim_rect.left)
+                    ly2 = round(sy2 - sim_rect.top)
+                    ratio = (t_idx + 1) / len(node.trail)
+                    r = int(33 + (59 - 33) * ratio)
+                    g = int(33 + (130 - 33) * ratio)
+                    b = int(38 + (246 - 38) * ratio)
+                    pygame.draw.line(sim_zone_surface, (r, g, b), (lx1, ly1), (lx2, ly2), trail_thickness)
 
     for i, node in enumerate(truss.nodes):
         if is_physics_playing and not node_has_connections[i] and not node.is_anchor_x and not node.is_anchor_y: continue
@@ -1114,7 +1152,7 @@ while is_running:
 
         if is_beam_selected:
             hud_w = 340
-            hud_h = 55 + (len([l for l in top_lines if l != "-"]) * 20) + (16 * top_lines.count("-")) + 105
+            hud_h = 55 + (len([l for l in top_lines if l != "-"]) * 20) + (16 * top_lines.count("-")) + 105 + 110
         else:
             hud_w = max(260, max([font_body.size(line)[0] for line in lines]) + 40)
             hud_h = 45 + (len([l for l in lines if l != "-"]) * 20) + (16 * lines.count("-"))
@@ -1161,6 +1199,33 @@ while is_running:
                 else:
                     hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (115, sub_y))
                 sub_y += 17
+                
+            sub_y += 15
+            
+            hud_surface.blit(font_body.render("Utilization History", True, COLOR_TEXT_MUTED), (15, sub_y))
+            peak_str_txt = f"Highest: {beam.peak_utilization_seen * 100.0:.1f}%"
+            peak_surf = font_body.render(peak_str_txt, True, COLOR_TEXT_MAIN)
+            hud_surface.blit(peak_surf, (hud_w - 15 - peak_surf.get_width(), sub_y))
+            
+            sub_y += 20
+            graph_rect = pygame.Rect(15, sub_y, hud_w - 30, 55)
+            pygame.draw.rect(hud_surface, (12, 12, 14), graph_rect, border_radius=4)
+            pygame.draw.rect(hud_surface, COLOR_UI_BORDER, graph_rect, width=1, border_radius=4)
+            
+            graph_max = max(110.0, (beam.peak_utilization_seen * 100.0) + 10.0)
+            y_100 = graph_rect.bottom - (100.0 / graph_max) * graph_rect.height
+            
+            if graph_rect.top < y_100 < graph_rect.bottom:
+                pygame.draw.line(hud_surface, (180, 50, 50), (graph_rect.left, y_100), (graph_rect.right, y_100), 1)
+            
+            if len(beam.history) > 1:
+                pts = []
+                for t_idx, val in enumerate(beam.history):
+                    px = graph_rect.left + (t_idx / 299.0) * graph_rect.width
+                    py = graph_rect.bottom - (val / graph_max) * graph_rect.height
+                    py = max(graph_rect.top, min(graph_rect.bottom, py))
+                    pts.append((px, py))
+                pygame.draw.lines(hud_surface, COLOR_HIGHLIGHT, False, pts, 2)
                 
         else:
             for line in lines:

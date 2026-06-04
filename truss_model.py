@@ -13,6 +13,7 @@ class Node:
         self.rx = 0.0
         self.ry = 0.0
         self.peak_speed = 0.0
+        self.trail = []
 
     def toggle_support(self):
         if not self.is_anchor_x and not self.is_anchor_y:
@@ -59,6 +60,7 @@ class Beam:
         self.broken_at_gravity = None
         self.peak_utilization_seen = 0.0
         self.minimum_fos_seen = float('inf')
+        self.history = []
         self.update_material_properties(material)
 
     def update_material_properties(self, material):
@@ -89,6 +91,7 @@ class Beam:
         self.broken_at_gravity = None
         self.peak_utilization_seen = 0.0
         self.minimum_fos_seen = float('inf')
+        self.history.clear()
 
     def to_dict(self):
         return {
@@ -136,9 +139,11 @@ class TrussSystem:
         self.peak_utilization_recorded = 0.0
         for node in self.nodes:
             node.peak_speed = 0.0
+            node.trail.clear()
         for beam in self.beams:
             beam.peak_utilization_seen = 0.0
             beam.minimum_fos_seen = float('inf')
+            beam.history.clear()
 
     def set_material(self, material):
         if material in ["Steel", "Aluminum", "Titanium"]:
