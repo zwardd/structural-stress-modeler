@@ -227,7 +227,7 @@ class TrussSystem:
             dynamic_eval_fn(self, gravity_multiplier)
             
         TARGET_UTIL = 0.50
-        TOLERANCE = 0.05
+        TOLERANCE = 0.02
         MIN_UTIL = TARGET_UTIL - TOLERANCE
         step_changed = False
         
@@ -257,10 +257,10 @@ class TrussSystem:
                         continue
                     
                     if p_util > TARGET_UTIL:
-                        delta = max(0.001, min(0.015, (p_util - TARGET_UTIL) * 0.02))
+                        delta = max(0.0002, min(0.004, (p_util - TARGET_UTIL) * 0.02))
                         test_w = min(0.3, beam.dim_w + delta)
                     elif p_util < MIN_UTIL:
-                        delta = max(0.0005, min(0.008, (MIN_UTIL - p_util) * 0.01))
+                        delta = max(0.0001, min(0.002, (MIN_UTIL - p_util) * 0.01))
                         test_w = max(0.01, beam.dim_w - delta)
                     else:
                         test_w = beam.dim_w
@@ -294,7 +294,7 @@ class TrussSystem:
             if beam.profile in ["Square Tube", "H-Beam"]:
                 beam.dim_t = max(0.002, min(beam.dim_w * 0.4, beam.dim_w * 0.1))
             beam.recalculate_geometry()
-            if not math.isclose(beam.dim_w, old_w, abs_tol=1e-5):
+            if not math.isclose(beam.dim_w, old_w, abs_tol=1e-6):
                 step_changed = True
                 
         return step_changed

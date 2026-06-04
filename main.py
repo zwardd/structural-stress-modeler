@@ -604,7 +604,8 @@ while is_running:
                     break
 
             if event.button == 1:
-                if current_mode == "LOAD" and clicked_node_idx is not None: selected_node_idx, selected_beam_idx = clicked_node_idx, None
+                if current_mode == "LOAD" and clicked_node_idx is not None: 
+                    selected_node_idx, selected_beam_idx = clicked_node_idx, None
                 elif current_mode == "SELECT":
                     selected_node_idx = clicked_node_idx
                     selected_beam_idx = None
@@ -613,11 +614,18 @@ while is_running:
                             if b.status == "FRACTURED": continue
                             if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < (8 / camera.zoom_scale):
                                 selected_beam_idx = i
-                elif current_mode == "NODE" and clicked_node_idx is None:
+                elif current_mode == "NODE":
                     sim_mouse_x = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_x))
                     sim_mouse_y = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_y))
                     truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=grid_enabled, grid_size=GRID_SIZE)
                     first_break_gravity, show_benchmark_hud = None, False
+                elif current_mode == "BEAM":
+                    if clicked_node_idx is not None:
+                        if active_node_bnd is None: active_node_bnd = clicked_node_idx
+                        else:
+                            truss.add_beam(active_node_bnd, clicked_node_idx)
+                            active_node_bnd, first_break_gravity, show_benchmark_hud = None, None, False
+                    else: active_node_bnd = None
                 elif current_mode == "BEAM":
                     if clicked_node_idx is not None:
                         if active_node_bnd is None: active_node_bnd = clicked_node_idx
