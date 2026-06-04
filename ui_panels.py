@@ -11,7 +11,7 @@ class UIManager:
 
     def draw_sidebar(self, screen, truss, sim_ctrl, current_mode, show_benchmark_hud, is_optimizing, trails_enabled, allow_profile_switching, ui_rects, calc_util_fn):
         pygame.draw.rect(screen, COLOR_PANEL_BG, ui_rects["sidebar"])
-        pygame.draw.line(screen, COLOR_UI_BORDER, (140, 0), (140, 700), 2)
+        pygame.draw.line(screen, COLOR_UI_BORDER, (140, 0), (140, screen.get_height()), 2)
         
         modes_list = [
             (ui_rects["btn_select"], "1. Select", "SELECT"), 
@@ -99,7 +99,7 @@ class UIManager:
             m_fos_txt = self.font_header.render(f"{min_rec:.2f}", True, COLOR_ZERO_LOAD if min_rec >= 2.0 else COLOR_MID_LOAD)
         screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 448))
 
-        pygame.draw.line(screen, COLOR_UI_BORDER, (10, 470), (130, 470), 1)
+        pygame.draw.line(screen, COLOR_UI_BORDER, (10, ui_rects["btn_play"].y - 10), (130, ui_rects["btn_play"].y - 10), 1)
 
         btn_play = ui_rects["btn_play"]
         pygame.draw.rect(screen, (35, 40, 60) if sim_ctrl.state == "PLAY" else COLOR_BACKGROUND, btn_play, border_radius=4)
@@ -119,7 +119,7 @@ class UIManager:
         r_surf = self.font_header.render(" << ", True, COLOR_TEXT_MAIN)
         screen.blit(r_surf, (btn_reset.x + (btn_reset.width - r_surf.get_width())//2, btn_reset.y + (btn_reset.height - r_surf.get_height())//2))
 
-        screen.blit(self.font_body.render("Speed:", True, COLOR_TEXT_MUTED), (15, 515))
+        screen.blit(self.font_body.render("Speed:", True, COLOR_TEXT_MUTED), (15, ui_rects["btn_s25"].y - 15))
 
         speed_options = [
             (ui_rects["btn_s25"], "1/4", 0.25),
@@ -164,7 +164,9 @@ class UIManager:
         metrics = calculate_benchmark_metrics(truss)
         if metrics is not None:
             bhud_w, bhud_h = 430, 200
-            bhud_x, bhud_y = sim_rect.left + 15, sim_rect.top + 15
+            bhud_x = sim_rect.left + 15
+            bhud_y = sim_rect.top + 15
+            
             bhud_surface = pygame.Surface((bhud_w, bhud_h), pygame.SRCALPHA)
             pygame.draw.rect(bhud_surface, (18, 18, 20, 220), (0, 0, bhud_w, bhud_h), border_radius=6)
             pygame.draw.rect(bhud_surface, (63, 63, 70, 255), (0, 0, bhud_w, bhud_h), width=1, border_radius=6)
@@ -194,7 +196,9 @@ class UIManager:
             screen.blit(bhud_surface, (bhud_x, bhud_y))
         else:
             bhud_w, bhud_h = 320, 45
-            bhud_x, bhud_y = sim_rect.left + 15, sim_rect.top + 15
+            bhud_x = sim_rect.left + 15
+            bhud_y = sim_rect.top + 15
+            
             bhud_surface = pygame.Surface((bhud_w, bhud_h), pygame.SRCALPHA)
             pygame.draw.rect(bhud_surface, (18, 18, 20, 220), (0, 0, bhud_w, bhud_h), border_radius=6)
             pygame.draw.rect(bhud_surface, (127, 29, 29, 255), (0, 0, bhud_w, bhud_h), width=1, border_radius=6)
@@ -286,12 +290,12 @@ class UIManager:
             peak_speed = node.peak_speed
             
             lines = [
-                f"Coordinates: ({round(node.x)}, {round(node.y)})",
+                f"Coordinates: ({round(node.x)}, {round(-node.y)})",
                 f"Support Type: {support_str}",
                 "-",
                 f"Net Load: {net_magnitude:.1f} kN",
                 f"Load X: {node.load_x / 1000.0:.1f} kN",
-                f"Load Y: {effective_y / 1000.0:.1f} kN"
+                f"Load Y: {-effective_y / 1000.0:.1f} kN"
             ]
             
             if node.is_anchor_x or node.is_anchor_y:
@@ -300,7 +304,7 @@ class UIManager:
                     "-",
                     f"Net React: {net_react:.1f} kN",
                     f"React X: {node.rx / 1000.0:.1f} kN",
-                    f"React Y: {node.ry / 1000.0:.1f} kN"
+                    f"React Y: {-node.ry / 1000.0:.1f} kN"
                 ])
                 
             lines.extend([
@@ -421,7 +425,7 @@ class UIManager:
                 
                 pygame.draw.rect(hud_surface, (30, 30, 35) if (input_active and input_type == "Y") else (10, 10, 12), box_y, border_radius=4)
                 pygame.draw.rect(hud_surface, COLOR_UI_BORDER, box_y, width=1, border_radius=4)
-                hud_surface.blit(self.font_body.render("FY: " + (input_buffer if (input_active and input_type == "Y") else f"{truss.nodes[selected_node_idx].load_y/1000.0:.1f}") + ("_" if (input_active and input_type == "Y") else " kN"), True, COLOR_TEXT_MAIN), (127, local_y + 5))
+                hud_surface.blit(self.font_body.render("FY: " + (input_buffer if (input_active and input_type == "Y") else f"{-truss.nodes[selected_node_idx].load_y/1000.0:.1f}") + ("_" if (input_active and input_type == "Y") else " kN"), True, COLOR_TEXT_MAIN), (127, local_y + 5))
                 hud_surface.blit(self.font_body.render("Click box, type value, press Enter", True, COLOR_TEXT_MUTED), (15, local_y + 35))
 
         screen.blit(hud_surface, (hud_x, sim_rect.top + 15))
@@ -435,8 +439,9 @@ class UIManager:
         screen.blit(self.font_header.render(status_banner_text, True, COLOR_TEXT_MAIN), (sb_rect.x + 15, sb_rect.y + 9))
 
     def draw_bottom_legend(self, screen, gravity_multiplier, first_break_gravity, grid_enabled):
+        h = screen.get_height()
         grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"
         if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
-        screen.blit(self.font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
-        screen.blit(self.font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-        screen.blit(self.font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] width | { / } thickness | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle | Scroll Wheel Zoom | Mid-Click Drag Pan | [H] Home Cam", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+        screen.blit(self.font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, h - 75))
+        screen.blit(self.font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, h - 55))
+        screen.blit(self.font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE] Playback | Arrow Keys adjust external node loads | [ / ] width | { / } thickness | [M] alloy | [P] profile | [W] Self-Weight | [H] Home Cam | [F11] Fullscreen", True, COLOR_TEXT_MUTED), (165, h - 35))

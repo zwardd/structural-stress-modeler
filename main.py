@@ -18,7 +18,7 @@ root.withdraw()
 
 pygame.init()
 
-screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT))
+screen = pygame.display.set_mode((WINDOW_WIDTH, WINDOW_HEIGHT), pygame.RESIZABLE)
 pygame.display.set_caption("Structural Stress Modeler - 2D Truss Analysis")
 
 font_header = pygame.font.SysFont("Helvetica", 16, bold=True)
@@ -46,7 +46,11 @@ app_state = {
     "fading_beams": [],
     "active_node_bnd": None,
     "selected_node_idx": None,
-    "selected_beam_idx": None
+    "selected_beam_idx": None,
+    "is_fullscreen": False,
+    "windowed_size": (WINDOW_WIDTH, WINDOW_HEIGHT),
+    "request_resize": None,
+    "request_fullscreen_toggle": False
 }
 
 status_banner_text = ""
@@ -144,21 +148,54 @@ def compute_dynamic_reactions(truss, gravity_mult):
         if node.is_anchor_x: node.rx = -fx_net
         if node.is_anchor_y: node.ry = -fy_net
 
-ui_rects = {
-    "sidebar": pygame.Rect(0, 0, 140, 700),
-    "btn_select": pygame.Rect(15, 80, 110, 35), "btn_node": pygame.Rect(15, 125, 110, 35), 
-    "btn_beam": pygame.Rect(15, 170, 110, 35), "btn_load": pygame.Rect(15, 215, 110, 35), 
-    "btn_benchmark": pygame.Rect(15, 260, 110, 35),
-    "btn_play": pygame.Rect(15, 480, 34, 30), "btn_pause": pygame.Rect(53, 480, 34, 30), 
-    "btn_reset": pygame.Rect(91, 480, 34, 30),
-    "btn_s25": pygame.Rect(15 + 0*22, 530, 20, 20), "btn_s50": pygame.Rect(15 + 1*22, 530, 20, 20), 
-    "btn_s10": pygame.Rect(15 + 2*22, 530, 20, 20), "btn_s20": pygame.Rect(15 + 3*22, 530, 20, 20), 
-    "btn_s40": pygame.Rect(15 + 4*22, 530, 20, 20),
-    "btn_w_toggle": pygame.Rect(15, 560, 110, 30), "btn_optimize": pygame.Rect(15, 600, 110, 35), 
-    "btn_trails": pygame.Rect(15, 645, 110, 30), "chk_profile": pygame.Rect(15, 685, 14, 14)
-}
+def build_ui_rects(w, h):
+    return {
+        "sidebar": pygame.Rect(0, 0, 140, h),
+        "btn_select": pygame.Rect(15, 80, 110, 35), 
+        "btn_node": pygame.Rect(15, 125, 110, 35), 
+        "btn_beam": pygame.Rect(15, 170, 110, 35), 
+        "btn_load": pygame.Rect(15, 215, 110, 35), 
+        "btn_benchmark": pygame.Rect(15, 260, 110, 35),
+        "btn_play": pygame.Rect(15, h - 220, 34, 30), 
+        "btn_pause": pygame.Rect(53, h - 220, 34, 30), 
+        "btn_reset": pygame.Rect(91, h - 220, 34, 30),
+        "btn_s25": pygame.Rect(15 + 0*22, h - 170, 20, 20), 
+        "btn_s50": pygame.Rect(15 + 1*22, h - 170, 20, 20), 
+        "btn_s10": pygame.Rect(15 + 2*22, h - 170, 20, 20), 
+        "btn_s20": pygame.Rect(15 + 3*22, h - 170, 20, 20), 
+        "btn_s40": pygame.Rect(15 + 4*22, h - 170, 20, 20),
+        "btn_w_toggle": pygame.Rect(15, h - 140, 110, 30), 
+        "btn_optimize": pygame.Rect(15, h - 100, 110, 35), 
+        "btn_trails": pygame.Rect(15, h - 55, 110, 30), 
+        "chk_profile": pygame.Rect(15, h - 15, 14, 14)
+    }
+
+ui_rects = build_ui_rects(WINDOW_WIDTH, WINDOW_HEIGHT)
 
 while app_state["is_running"]:
+    if app_state.get("request_resize"):
+        w, h = app_state["request_resize"]
+        is_fs = app_state["is_fullscreen"]
+        screen = pygame.display.set_mode((w, h), pygame.RESIZABLE | (pygame.FULLSCREEN if is_fs else 0))
+        sim_rect.update(160, 20, w - 180, h - 40)
+        ui_rects = build_ui_rects(w, h)
+        app_state["request_resize"] = None
+        
+    if app_state.get("request_fullscreen_toggle"):
+        is_fs = app_state["is_fullscreen"]
+        if is_fs:
+            app_state["windowed_size"] = (screen.get_width(), screen.get_height())
+            info = pygame.display.Info()
+            w, h = info.current_w, info.current_h
+            screen = pygame.display.set_mode((w, h), pygame.FULLSCREEN)
+        else:
+            w, h = app_state.get("windowed_size", (WINDOW_WIDTH, WINDOW_HEIGHT))
+            screen = pygame.display.set_mode((w, h), pygame.RESIZABLE)
+            
+        sim_rect.update(160, 20, w - 180, h - 40)
+        ui_rects = build_ui_rects(w, h)
+        app_state["request_fullscreen_toggle"] = False
+
     InputHandler.process_events(truss, camera, sim_ctrl, ui_rects, app_state, trigger_status)
     InputHandler.process_continuous(truss, sim_ctrl, app_state)
     camera.update(pygame.mouse.get_pos())
@@ -281,13 +318,18 @@ while app_state["is_running"]:
         scaled_grid = GRID_SIZE * camera.zoom_scale
         if scaled_grid > 2:
             start_sim_x, start_sim_y = camera.to_sim(sim_rect.left, sim_rect.top)
-            start_g_x = (math.ceil(start_sim_x / GRID_SIZE) * GRID_SIZE)
-            start_g_y = (math.ceil(start_sim_y / GRID_SIZE) * GRID_SIZE)
-
             end_sim_x, end_sim_y = camera.to_sim(sim_rect.right, sim_rect.bottom)
 
+            sim_left = min(start_sim_x, end_sim_x)
+            sim_right = max(start_sim_x, end_sim_x)
+            sim_top = min(start_sim_y, end_sim_y)
+            sim_bottom = max(start_sim_y, end_sim_y)
+
+            start_g_x = (math.ceil(sim_left / GRID_SIZE) * GRID_SIZE)
+            start_g_y = (math.ceil(sim_top / GRID_SIZE) * GRID_SIZE)
+
             curr_g_x = start_g_x
-            while curr_g_x <= end_sim_x:
+            while curr_g_x <= sim_right:
                 screen_x, _ = camera.to_screen(curr_g_x, 0)
                 local_x = screen_x - sim_rect.left
                 if 0 <= local_x <= sim_rect.width:
@@ -295,7 +337,7 @@ while app_state["is_running"]:
                 curr_g_x += GRID_SIZE
 
             curr_g_y = start_g_y
-            while curr_g_y <= end_sim_y:
+            while curr_g_y <= sim_bottom:
                 _, screen_y = camera.to_screen(0, curr_g_y)
                 local_y = screen_y - sim_rect.top
                 if 0 <= local_y <= sim_rect.height:

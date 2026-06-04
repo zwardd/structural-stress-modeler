@@ -207,9 +207,9 @@ class TrussSystem:
         self.clear()
         self.active_material = "Steel"
         self.self_weight_enabled = False
-        self.add_node(450, 150)
-        self.add_node(450, 390)
-        self.add_node(690, 390)
+        self.add_node(-120, -120)
+        self.add_node(-120, 120)
+        self.add_node(120, 120)
         self.nodes[0].is_anchor_x = True
         self.nodes[0].is_anchor_y = True
         self.nodes[1].is_anchor_x = True

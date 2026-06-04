@@ -8,7 +8,6 @@ from materials import MaterialManager
 from physics_engine import PhysicsSimulation
 
 def run_determinism_test(base_truss, num_runs=3, frames=180):
-    print("\n--- STARTING PHYSICS DETERMINISM TEST ---")
     state_str = json.dumps({
         "self_weight_enabled": base_truss.self_weight_enabled,
         "active_material": base_truss.active_material,
@@ -60,22 +59,16 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
             history.append(frame_hash)
             
         run_histories.append(history)
-        print(f"Run {run_idx+1} completed.")
 
     diverged = False
     for f in range(frames):
         val = run_histories[0][f]
         for r in range(1, num_runs):
             if run_histories[r][f] != val:
-                print(f"!! DIVERGENCE DETECTED at Frame {f} !! Run 1: {val}, Run {r+1}: {run_histories[r][f]}")
                 diverged = True
                 break
         if diverged: break
     
-    if not diverged:
-        print(f"SUCCESS: 100% Deterministic across {num_runs} runs ({frames} frames each).")
-    print("-----------------------------------------\n")
-
 def point_to_line_distance(px, py, x1, y1, x2, y2):
     dx = x2 - x1
     dy = y2 - y1
@@ -92,6 +85,9 @@ class InputHandler:
             if event.type == pygame.QUIT:
                 app_state["is_running"] = False
                 
+            elif event.type == pygame.VIDEORESIZE:
+                app_state["request_resize"] = (event.w, event.h)
+
             elif event.type == pygame.MOUSEWHEEL:
                 if camera.process_event(event, mouse_pos):
                     continue
@@ -105,7 +101,7 @@ class InputHandler:
                                 if app_state["input_type"] == "X": 
                                     truss.nodes[app_state["selected_node_idx"]].load_x = val
                                 else: 
-                                    truss.nodes[app_state["selected_node_idx"]].load_y = val
+                                    truss.nodes[app_state["selected_node_idx"]].load_y = -val
                             app_state["first_break_gravity"] = None
                         except ValueError: pass
                         app_state["input_active"] = False
@@ -139,7 +135,11 @@ class InputHandler:
                             trigger_status(status)
                         continue
 
-                if event.key == pygame.K_SPACE and not pygame.key.get_mods() & pygame.KMOD_ALT:
+                if event.key == pygame.K_F11:
+                    app_state["is_fullscreen"] = not app_state.get("is_fullscreen", False)
+                    app_state["request_fullscreen_toggle"] = True
+
+                elif event.key == pygame.K_SPACE and not pygame.key.get_mods() & pygame.KMOD_ALT:
                     if sim_ctrl.state == "EDIT":
                         sim_ctrl.play(truss, app_state["gravity_multiplier"])
                         app_state["is_optimizing"] = False
@@ -154,7 +154,6 @@ class InputHandler:
                         trigger_status("SIMULATION RESUMED")
                 elif event.key == pygame.K_t and pygame.key.get_mods() & pygame.KMOD_SHIFT:
                     if sim_ctrl.state == "EDIT":
-                        trigger_status("RUNNING DETERMINISM TEST (SEE CONSOLE)")
                         run_determinism_test(truss)
                 elif event.key == pygame.K_h:
                     camera.reset()
