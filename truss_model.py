@@ -57,8 +57,8 @@ class Beam:
         self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
-        self.peak_utilization = 0.0
-        self.lowest_fos = float('inf')
+        self.peak_utilization_seen = 0.0
+        self.minimum_fos_seen = float('inf')
         self.update_material_properties(material)
 
     def update_material_properties(self, material):
@@ -87,8 +87,8 @@ class Beam:
         self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
-        self.peak_utilization = 0.0
-        self.lowest_fos = float('inf')
+        self.peak_utilization_seen = 0.0
+        self.minimum_fos_seen = float('inf')
 
     def to_dict(self):
         return {
@@ -117,22 +117,28 @@ class TrussSystem:
         self.is_stable = True
         self.active_material = "Steel"
         self.self_weight_enabled = True
-        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
+        self.sim_stats = {"peak_mass": 0.0}
+        self.minimum_fos_recorded = float('inf')
+        self.peak_utilization_recorded = 0.0
 
     def clear(self):
         self.nodes.clear()
         self.beams.clear()
         self.displacements = None
         self.is_stable = True
-        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
+        self.sim_stats = {"peak_mass": 0.0}
+        self.minimum_fos_recorded = float('inf')
+        self.peak_utilization_recorded = 0.0
 
     def reset_sim_stats(self):
-        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
+        self.sim_stats = {"peak_mass": 0.0}
+        self.minimum_fos_recorded = float('inf')
+        self.peak_utilization_recorded = 0.0
         for node in self.nodes:
             node.peak_speed = 0.0
         for beam in self.beams:
-            beam.peak_utilization = 0.0
-            beam.lowest_fos = float('inf')
+            beam.peak_utilization_seen = 0.0
+            beam.minimum_fos_seen = float('inf')
 
     def set_material(self, material):
         if material in ["Steel", "Aluminum", "Titanium"]:
@@ -235,7 +241,7 @@ class TrussSystem:
             if beam.status == "FRACTURED":
                 continue
                 
-            util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
+            util = beam.peak_utilization_seen if is_mechanism else calculate_utilization_fn(beam)
             if util == 0.0:
                 continue
             
@@ -252,15 +258,15 @@ class TrussSystem:
                     beam.dim_t = saved_t
                     beam.recalculate_geometry()
                     
-                    p_util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
+                    p_util = beam.peak_utilization_seen if is_mechanism else calculate_utilization_fn(beam)
                     if p_util == 0.0:
                         continue
                     
                     if p_util > TARGET_UTIL:
-                        delta = max(0.0002, min(0.004, (p_util - TARGET_UTIL) * 0.02))
+                        delta = max(0.0002, min(0.004, (p_util - TARGET_UTIL) * 0.01))
                         test_w = min(0.3, beam.dim_w + delta)
                     elif p_util < MIN_UTIL:
-                        delta = max(0.0001, min(0.002, (MIN_UTIL - p_util) * 0.01))
+                        delta = max(0.0001, min(0.002, (MIN_UTIL - p_util) * 0.005))
                         test_w = max(0.01, beam.dim_w - delta)
                     else:
                         test_w = beam.dim_w
@@ -284,12 +290,12 @@ class TrussSystem:
                     step_changed = True
 
             old_w = beam.dim_w
-            util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
+            util = beam.peak_utilization_seen if is_mechanism else calculate_utilization_fn(beam)
             if util > TARGET_UTIL:
-                delta = max(0.001, min(0.015, (util - TARGET_UTIL) * 0.02))
+                delta = max(0.0002, min(0.004, (util - TARGET_UTIL) * 0.01))
                 beam.dim_w = min(0.3, beam.dim_w + delta)
             elif util < MIN_UTIL:
-                delta = max(0.0005, min(0.008, (MIN_UTIL - util) * 0.01))
+                delta = max(0.0001, min(0.002, (MIN_UTIL - util) * 0.005))
                 beam.dim_w = max(0.01, beam.dim_w - delta)
             if beam.profile in ["Square Tube", "H-Beam"]:
                 beam.dim_t = max(0.002, min(beam.dim_w * 0.4, beam.dim_w * 0.1))

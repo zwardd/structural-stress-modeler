@@ -197,8 +197,11 @@ def run_dynamic_eval(truss_obj, grav_mult):
             if b.status == "FRACTURED": continue
             util = calculate_utilization(b)
             fos = 1.0 / util if util > 0.0 else float('inf')
-            b.peak_utilization = max(b.peak_utilization, util)
-            b.lowest_fos = min(b.lowest_fos, fos)
+            b.peak_utilization_seen = max(b.peak_utilization_seen, util)
+            b.minimum_fos_seen = min(b.minimum_fos_seen, fos)
+            
+            truss_obj.peak_utilization_recorded = max(truss_obj.peak_utilization_recorded, util)
+            truss_obj.minimum_fos_recorded = min(truss_obj.minimum_fos_recorded, fos)
             
     for i, s in enumerate(saved_state):
         truss_obj.nodes[i].x = s["x"]
@@ -604,8 +607,7 @@ while is_running:
                     break
 
             if event.button == 1:
-                if current_mode == "LOAD" and clicked_node_idx is not None: 
-                    selected_node_idx, selected_beam_idx = clicked_node_idx, None
+                if current_mode == "LOAD" and clicked_node_idx is not None: selected_node_idx, selected_beam_idx = clicked_node_idx, None
                 elif current_mode == "SELECT":
                     selected_node_idx = clicked_node_idx
                     selected_beam_idx = None
@@ -619,13 +621,6 @@ while is_running:
                     sim_mouse_y = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_y))
                     truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=grid_enabled, grid_size=GRID_SIZE)
                     first_break_gravity, show_benchmark_hud = None, False
-                elif current_mode == "BEAM":
-                    if clicked_node_idx is not None:
-                        if active_node_bnd is None: active_node_bnd = clicked_node_idx
-                        else:
-                            truss.add_beam(active_node_bnd, clicked_node_idx)
-                            active_node_bnd, first_break_gravity, show_benchmark_hud = None, None, False
-                    else: active_node_bnd = None
                 elif current_mode == "BEAM":
                     if clicked_node_idx is not None:
                         if active_node_bnd is None: active_node_bnd = clicked_node_idx
@@ -674,17 +669,17 @@ while is_running:
                 current_mass += length_m * b.area * b.density
                 
                 fos = 1.0 / utilization if utilization > 0.0 else float('inf')
-                b.peak_utilization = max(b.peak_utilization, utilization)
-                b.lowest_fos = min(b.lowest_fos, fos)
+                b.peak_utilization_seen = max(b.peak_utilization_seen, utilization)
+                b.minimum_fos_seen = min(b.minimum_fos_seen, fos)
                 current_max_util = max(current_max_util, utilization)
                 
                 if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
                     beams_to_break.append((b, utilization, b_idx))
 
             truss.sim_stats["peak_mass"] = max(truss.sim_stats["peak_mass"], current_mass)
-            truss.sim_stats["highest_utilization"] = max(truss.sim_stats["highest_utilization"], current_max_util)
+            truss.peak_utilization_recorded = max(truss.peak_utilization_recorded, current_max_util)
             sys_fos = 1.0 / current_max_util if current_max_util > 0.0 else float('inf')
-            truss.sim_stats["lowest_fos"] = min(truss.sim_stats["lowest_fos"], sys_fos)
+            truss.minimum_fos_recorded = min(truss.minimum_fos_recorded, sys_fos)
 
             beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
 
@@ -776,30 +771,53 @@ while is_running:
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
     
     sys_mass = max(truss.sim_stats["peak_mass"], total_mass) if is_physics_playing else total_mass
-    sys_peak_util = max(truss.sim_stats["highest_utilization"], max_util) if is_physics_playing else max_util
-    sys_min_fos = min(truss.sim_stats["lowest_fos"], fos_val) if is_physics_playing else fos_val
-
-    if selected_beam_idx is not None and truss.beams[selected_beam_idx].status == "FRACTURED":
-        selected_beam_idx = None
     
-    screen.blit(font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 350))
-    screen.blit(font_body.render(f"Peak Util: {sys_peak_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 370))
-    fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(fos_label, (15, 390))
+    peak_rec = truss.peak_utilization_recorded
+    min_rec = truss.minimum_fos_recorded
+    has_history = (peak_rec > 0.0) or (min_rec != float('inf'))
+    
+    if has_history or is_physics_playing:
+        peak_str = f"{peak_rec*100.0:.1f}%"
+    else:
+        peak_str = "N/A"
+        
+    screen.blit(font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 345))
+    screen.blit(font_body.render(f"Live Util: {max_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 360))
+    screen.blit(font_body.render(f"Peak Util: {peak_str}", True, COLOR_TEXT_MUTED), (15, 375))
+    
+    l_fos_lbl = font_body.render("Live FoS:", True, COLOR_TEXT_MUTED)
+    screen.blit(l_fos_lbl, (15, 390))
     
     if len(truss.beams) == 0:
-        fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
-    elif sys_peak_util >= 1.6:
-        fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
-    elif sys_peak_util >= 1.0:
-        fos_txt = font_header.render("FAIL", True, COLOR_YIELDING)
-    elif sys_peak_util == 0.0 or not math.isfinite(sys_min_fos):
-        fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
+        l_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
+    elif max_util >= 1.6:
+        l_fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
+    elif max_util >= 1.0:
+        l_fos_txt = font_header.render("FAIL", True, COLOR_YIELDING)
+    elif max_util == 0.0 or not math.isfinite(fos_val):
+        l_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
-        fos_txt = font_header.render(f"{sys_min_fos:.2f}", True, COLOR_ZERO_LOAD if sys_min_fos >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 388))
+        l_fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
+    screen.blit(l_fos_txt, (15 + l_fos_lbl.get_width() + 5, 388))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 420), (130, 420), 1)
+    m_fos_lbl = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
+    screen.blit(m_fos_lbl, (15, 405))
+    
+    if len(truss.beams) == 0:
+        m_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
+    elif peak_rec >= 1.6 and (has_history or is_physics_playing):
+        m_fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
+    elif peak_rec >= 1.0 and (has_history or is_physics_playing):
+        m_fos_txt = font_header.render("FAIL", True, COLOR_YIELDING)
+    elif not has_history and not is_physics_playing:
+        m_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
+    elif not math.isfinite(min_rec):
+        m_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
+    else:
+        m_fos_txt = font_header.render(f"{min_rec:.2f}", True, COLOR_ZERO_LOAD if min_rec >= 2.0 else COLOR_MID_LOAD)
+    screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 403))
+
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 425), (130, 425), 1)
 
     pygame.draw.rect(screen, (35, 40, 60) if is_physics_playing else COLOR_BACKGROUND, btn_physics_play, border_radius=4)
     pygame.draw.rect(screen, (100, 150, 255) if is_physics_playing else COLOR_UI_BORDER, btn_physics_play, width=1, border_radius=4)
@@ -1000,13 +1018,20 @@ while is_running:
             
             live_util = calculate_utilization(beam)
             live_util_pct = live_util * 100.0
-            peak_util_pct = max(beam.peak_utilization, live_util) * 100.0 if is_physics_playing else live_util_pct
+            
+            b_peak = beam.peak_utilization_seen
+            b_min = beam.minimum_fos_seen
+            b_has_history = (b_peak > 0.0) or (b_min != float('inf'))
             
             live_fos = 1.0 / live_util if live_util > 0.0 else float('inf')
-            min_fos = min(beam.lowest_fos, live_fos) if is_physics_playing else live_fos
-            
             live_fos_str = f"{live_fos:.2f}" if math.isfinite(live_fos) else "N/A"
-            min_fos_str = f"{min_fos:.2f}" if math.isfinite(min_fos) else "N/A"
+            
+            if b_has_history or is_physics_playing:
+                peak_str = f"{b_peak * 100.0:.1f}%"
+                min_fos_str = f"{b_min:.2f}" if math.isfinite(b_min) else "N/A"
+            else:
+                peak_str = "N/A"
+                min_fos_str = "N/A"
             
             nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
             
@@ -1016,10 +1041,10 @@ while is_running:
                 f"Force: {force_k_n:.1f} kN",
                 f"Stress: {stress_m_pa:.1f} MPa",
                 "-",
-                f"Live Util: {live_util_pct:.1f}%",
-                f"Peak Util: {peak_util_pct:.1f}%",
-                f"Live FoS: {live_fos_str}",
-                f"Min FoS: {min_fos_str}",
+                f"Utilization: {live_util_pct:.1f}%",
+                f"Peak Utilization: {peak_str}",
+                f"FoS: {live_fos_str}",
+                f"Minimum FoS: {min_fos_str}",
                 "-",
                 f"Nature: {nature}"
             ]
