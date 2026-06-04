@@ -117,7 +117,7 @@ class TrussSystem:
         self.is_stable = True
         self.active_material = "Steel"
         self.self_weight_enabled = True
-        self.sim_stats = {"peak_mass": 0.0}
+        self.sim_stats = {"peak_mass": 0.0, "sim_time": 0.0}
         self.minimum_fos_recorded = float('inf')
         self.peak_utilization_recorded = 0.0
 
@@ -126,12 +126,12 @@ class TrussSystem:
         self.beams.clear()
         self.displacements = None
         self.is_stable = True
-        self.sim_stats = {"peak_mass": 0.0}
+        self.sim_stats = {"peak_mass": 0.0, "sim_time": 0.0}
         self.minimum_fos_recorded = float('inf')
         self.peak_utilization_recorded = 0.0
 
     def reset_sim_stats(self):
-        self.sim_stats = {"peak_mass": 0.0}
+        self.sim_stats = {"peak_mass": 0.0, "sim_time": 0.0}
         self.minimum_fos_recorded = float('inf')
         self.peak_utilization_recorded = 0.0
         for node in self.nodes:

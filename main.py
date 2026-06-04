@@ -190,6 +190,7 @@ def run_dynamic_eval(truss_obj, grav_mult):
     
     frames = 120 
     for _ in range(frames):
+        truss_obj.sim_stats["sim_time"] += 1.0 / 60.0
         sim.step(grav_mult)
         sim.sync_to_truss(truss_obj)
         
@@ -399,10 +400,11 @@ while is_running:
     btn_beam         = pygame.Rect(15, 170, 110, 35)
     btn_load         = pygame.Rect(15, 215, 110, 35)
     btn_benchmark    = pygame.Rect(15, 260, 110, 35)
-    btn_physics_play = pygame.Rect(15, 430, 110, 40)
-    btn_w_toggle     = pygame.Rect(15, 480, 110, 30)
-    btn_optimize     = pygame.Rect(15, 520, 110, 35)
-    chk_profile      = pygame.Rect(15, 565, 14, 14)
+    
+    btn_physics_play = pygame.Rect(15, 480, 110, 40)
+    btn_w_toggle     = pygame.Rect(15, 530, 110, 30)
+    btn_optimize     = pygame.Rect(15, 570, 110, 35)
+    chk_profile      = pygame.Rect(15, 615, 14, 14)
 
     mouse_pos = pygame.mouse.get_pos()
 
@@ -616,7 +618,7 @@ while is_running:
                             if b.status == "FRACTURED": continue
                             if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < (8 / camera.zoom_scale):
                                 selected_beam_idx = i
-                elif current_mode == "NODE":
+                elif current_mode == "NODE" and clicked_node_idx is None:
                     sim_mouse_x = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_x))
                     sim_mouse_y = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_y))
                     truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=grid_enabled, grid_size=GRID_SIZE)
@@ -648,6 +650,7 @@ while is_running:
 
     if is_physics_playing:
         if physics_sim is not None:
+            truss.sim_stats["sim_time"] += 1.0 / 60.0
             physics_sim.step(gravity_multiplier)
             physics_sim.sync_to_truss(truss)
             
@@ -771,6 +774,9 @@ while is_running:
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
     
     sys_mass = max(truss.sim_stats["peak_mass"], total_mass) if is_physics_playing else total_mass
+    sys_time = truss.sim_stats.get("sim_time", 0.0)
+    failed_count = sum(1 for b in truss.beams if b.status == "FRACTURED")
+    sys_max_vel = max([n.peak_speed for n in truss.nodes] + [0.0])
     
     peak_rec = truss.peak_utilization_recorded
     min_rec = truss.minimum_fos_recorded
@@ -781,12 +787,15 @@ while is_running:
     else:
         peak_str = "N/A"
         
-    screen.blit(font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 345))
-    screen.blit(font_body.render(f"Live Util: {max_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 360))
-    screen.blit(font_body.render(f"Peak Util: {peak_str}", True, COLOR_TEXT_MUTED), (15, 375))
+    screen.blit(font_body.render(f"Time: {sys_time:.2f} s", True, COLOR_TEXT_MUTED), (15, 345))
+    screen.blit(font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 360))
+    screen.blit(font_body.render(f"Failed: {failed_count}", True, COLOR_TEXT_MUTED), (15, 375))
+    screen.blit(font_body.render(f"Max Vel: {sys_max_vel:.2f} m/s", True, COLOR_TEXT_MUTED), (15, 390))
+    screen.blit(font_body.render(f"Live Util: {max_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 405))
+    screen.blit(font_body.render(f"Peak Util: {peak_str}", True, COLOR_TEXT_MUTED), (15, 420))
     
     l_fos_lbl = font_body.render("Live FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(l_fos_lbl, (15, 390))
+    screen.blit(l_fos_lbl, (15, 435))
     
     if len(truss.beams) == 0:
         l_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
@@ -798,10 +807,10 @@ while is_running:
         l_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
         l_fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(l_fos_txt, (15 + l_fos_lbl.get_width() + 5, 388))
+    screen.blit(l_fos_txt, (15 + l_fos_lbl.get_width() + 5, 433))
 
     m_fos_lbl = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(m_fos_lbl, (15, 405))
+    screen.blit(m_fos_lbl, (15, 450))
     
     if len(truss.beams) == 0:
         m_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
@@ -815,9 +824,9 @@ while is_running:
         m_fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
         m_fos_txt = font_header.render(f"{min_rec:.2f}", True, COLOR_ZERO_LOAD if min_rec >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 403))
+    screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 448))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 425), (130, 425), 1)
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 470), (130, 470), 1)
 
     pygame.draw.rect(screen, (35, 40, 60) if is_physics_playing else COLOR_BACKGROUND, btn_physics_play, border_radius=4)
     pygame.draw.rect(screen, (100, 150, 255) if is_physics_playing else COLOR_UI_BORDER, btn_physics_play, width=1, border_radius=4)
