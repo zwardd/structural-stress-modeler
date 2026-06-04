@@ -12,6 +12,7 @@ class Node:
         self.load_y = 0.0
         self.rx = 0.0
         self.ry = 0.0
+        self.peak_speed = 0.0
 
     def toggle_support(self):
         if not self.is_anchor_x and not self.is_anchor_y:
@@ -56,10 +57,11 @@ class Beam:
         self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
+        self.peak_utilization = 0.0
+        self.lowest_fos = float('inf')
         self.update_material_properties(material)
 
     def update_material_properties(self, material):
-        """Update material and recalculate properties via MaterialManager."""
         self.material = material
         specs = MaterialManager.get_material_specs(material)
         self.modulus = specs["modulus"]
@@ -67,18 +69,15 @@ class Beam:
         self.recalculate_geometry()
 
     def recalculate_geometry(self):
-        """Use MaterialManager to calculate cross-sectional properties."""
         self.area, self.inertia = MaterialManager.calculate_area_inertia(
             self.profile, self.dim_w, self.dim_t
         )
 
     def cycle_profile(self):
-        """Cycle to next profile type via MaterialManager."""
         self.profile = MaterialManager.get_next_profile(self.profile)
         self.recalculate_geometry()
 
     def adjust_dimension(self, delta):
-        """Adjust dimensions via MaterialManager."""
         self.dim_w, self.dim_t = MaterialManager.adjust_dimensions(
             self.profile, self.dim_w, self.dim_t, delta
         )
@@ -88,6 +87,8 @@ class Beam:
         self.status = "NORMAL"
         self.is_broken = False
         self.broken_at_gravity = None
+        self.peak_utilization = 0.0
+        self.lowest_fos = float('inf')
 
     def to_dict(self):
         return {
@@ -116,12 +117,22 @@ class TrussSystem:
         self.is_stable = True
         self.active_material = "Steel"
         self.self_weight_enabled = True
+        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
 
     def clear(self):
         self.nodes.clear()
         self.beams.clear()
         self.displacements = None
         self.is_stable = True
+        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
+
+    def reset_sim_stats(self):
+        self.sim_stats = {"peak_mass": 0.0, "lowest_fos": float('inf'), "highest_utilization": 0.0}
+        for node in self.nodes:
+            node.peak_speed = 0.0
+        for beam in self.beams:
+            beam.peak_utilization = 0.0
+            beam.lowest_fos = float('inf')
 
     def set_material(self, material):
         if material in ["Steel", "Aluminum", "Titanium"]:
@@ -203,18 +214,28 @@ class TrussSystem:
             beam.dim_t = 0.004
             beam.recalculate_geometry()
 
-    def optimize_step(self, calculate_utilization_fn, solve_truss_fn, gravity_multiplier, allow_profile_switching):
+    def optimize_step(self, calculate_utilization_fn, solve_truss_fn, gravity_multiplier, allow_profile_switching, dynamic_eval_fn=None):
         solve_truss_fn(self, gravity_multiplier)
-        if not self.is_stable or len(self.beams) == 0:
+        is_mechanism = not self.is_stable
+        
+        if len(self.beams) == 0:
             return False
+            
+        if is_mechanism:
+            if dynamic_eval_fn is None:
+                return False
+            dynamic_eval_fn(self, gravity_multiplier)
+            
         TARGET_UTIL = 0.50
         TOLERANCE = 0.05
         MIN_UTIL = TARGET_UTIL - TOLERANCE
         step_changed = False
+        
         for beam in self.beams:
             if beam.status == "FRACTURED":
                 continue
-            util = calculate_utilization_fn(beam)
+                
+            util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
             if util == 0.0:
                 continue
             
@@ -231,7 +252,7 @@ class TrussSystem:
                     beam.dim_t = saved_t
                     beam.recalculate_geometry()
                     
-                    p_util = calculate_utilization_fn(beam)
+                    p_util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
                     if p_util == 0.0:
                         continue
                     
@@ -263,7 +284,7 @@ class TrussSystem:
                     step_changed = True
 
             old_w = beam.dim_w
-            util = calculate_utilization_fn(beam)
+            util = beam.peak_utilization if is_mechanism else calculate_utilization_fn(beam)
             if util > TARGET_UTIL:
                 delta = max(0.001, min(0.015, (util - TARGET_UTIL) * 0.02))
                 beam.dim_w = min(0.3, beam.dim_w + delta)
@@ -275,4 +296,5 @@ class TrussSystem:
             beam.recalculate_geometry()
             if not math.isclose(beam.dim_w, old_w, abs_tol=1e-5):
                 step_changed = True
+                
         return step_changed

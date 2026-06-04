@@ -155,8 +155,8 @@ class PhysicsSimulation:
                         p2.y += corr_px_2 * ny
 
             for p in self.particles:
-                p.vx = (p.x - p.px) / self.dt
-                p.vy = (p.y - p.py) / self.dt
+                p.vx = ((p.x - p.px) / self.dt) * 0.9995
+                p.vy = ((p.y - p.py) / self.dt) * 0.9995
 
             for c in self.constraints:
                 c.frame_force_acc += (-c.lam / dt_sq)
@@ -169,6 +169,8 @@ class PhysicsSimulation:
             node = truss.nodes[p.node_idx]
             node.x = p.x
             node.y = p.y
+            speed_m_s = math.hypot(p.vx, p.vy) * 0.0125
+            node.peak_speed = max(node.peak_speed, speed_m_s)
             
         for c in self.constraints:
             c.beam.force = c.final_force

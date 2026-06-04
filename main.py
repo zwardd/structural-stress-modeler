@@ -182,6 +182,28 @@ def calculate_utilization(beam):
             return max(yield_util, buckle_util)
     return yield_util
 
+def run_dynamic_eval(truss_obj, grav_mult):
+    saved_state = [{"x": n.x, "y": n.y} for n in truss_obj.nodes]
+    truss_obj.reset_sim_stats()
+    
+    sim = PhysicsSimulation(truss_obj, gravity_mult=grav_mult, enable_gravity=truss_obj.self_weight_enabled)
+    
+    frames = 120 
+    for _ in range(frames):
+        sim.step(grav_mult)
+        sim.sync_to_truss(truss_obj)
+        
+        for b in truss_obj.beams:
+            if b.status == "FRACTURED": continue
+            util = calculate_utilization(b)
+            fos = 1.0 / util if util > 0.0 else float('inf')
+            b.peak_utilization = max(b.peak_utilization, util)
+            b.lowest_fos = min(b.lowest_fos, fos)
+            
+    for i, s in enumerate(saved_state):
+        truss_obj.nodes[i].x = s["x"]
+        truss_obj.nodes[i].y = s["y"]
+
 def get_stress_color(beam):
     if beam.status == "FRACTURED" or beam.force == 0.0:
         return (180, 180, 185)
@@ -429,6 +451,7 @@ while is_running:
             if event.key == pygame.K_SPACE and not pygame.key.get_mods() & pygame.KMOD_ALT:
                 if not is_physics_playing:
                     saved_truss_state = capture_truss_state()
+                    truss.reset_sim_stats()
                     physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
                     is_physics_playing = True
                     is_optimizing = False
@@ -441,6 +464,7 @@ while is_running:
                     if saved_truss_state:
                         restore_truss_state(saved_truss_state)
                     for b in truss.beams: b.reset_status()
+                    truss.reset_sim_stats()
                     trigger_status("DYNAMIC SIMULATION RESET")
             elif event.key == pygame.K_t and pygame.key.get_mods() & pygame.KMOD_SHIFT:
                 if not is_physics_playing:
@@ -481,10 +505,28 @@ while is_running:
                     truss.beams[selected_beam_idx].cycle_profile()
                     first_break_gravity = None
                 elif event.key == pygame.K_LEFTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_dimension(-0.005)
+                    mods = pygame.key.get_mods()
+                    b = truss.beams[selected_beam_idx]
+                    if mods & pygame.KMOD_SHIFT:
+                        if b.profile != "Solid Bar":
+                            b.dim_t = max(0.001, b.dim_t - 0.001)
+                            b.recalculate_geometry()
+                    else:
+                        b.dim_w = max(0.01, b.dim_w - 0.005)
+                        if b.profile != "Solid Bar" and b.dim_t > b.dim_w * 0.45:
+                            b.dim_t = b.dim_w * 0.45
+                        b.recalculate_geometry()
                     first_break_gravity = None
                 elif event.key == pygame.K_RIGHTBRACKET and selected_beam_idx is not None:
-                    truss.beams[selected_beam_idx].adjust_dimension(0.005)
+                    mods = pygame.key.get_mods()
+                    b = truss.beams[selected_beam_idx]
+                    if mods & pygame.KMOD_SHIFT:
+                        if b.profile != "Solid Bar":
+                            b.dim_t = min(b.dim_w * 0.45, b.dim_t + 0.001)
+                            b.recalculate_geometry()
+                    else:
+                        b.dim_w = min(0.32, b.dim_w + 0.005)
+                        b.recalculate_geometry()
                     first_break_gravity = None
                 elif event.key == pygame.K_m and selected_beam_idx is not None:
                     b = truss.beams[selected_beam_idx]
@@ -510,6 +552,7 @@ while is_running:
                 if btn_physics_play.collidepoint(event.pos):
                     if not is_physics_playing:
                         saved_truss_state = capture_truss_state()
+                        truss.reset_sim_stats()
                         physics_sim = PhysicsSimulation(truss, gravity_mult=gravity_multiplier, enable_gravity=truss.self_weight_enabled)
                         is_physics_playing = True
                         is_optimizing = False
@@ -521,6 +564,7 @@ while is_running:
                         if saved_truss_state:
                             restore_truss_state(saved_truss_state)
                         for b in truss.beams: b.reset_status()
+                        truss.reset_sim_stats()
                         trigger_status("DYNAMIC SIMULATION RESET")
                 elif btn_w_toggle.collidepoint(event.pos):
                     truss.self_weight_enabled = not truss.self_weight_enabled
@@ -607,13 +651,32 @@ while is_running:
             compute_dynamic_reactions(truss, gravity_multiplier)
 
             beams_to_break = []
+            current_mass = 0.0
+            current_max_util = 0.0
+            
             for b_idx, b in enumerate(truss.beams):
                 if b.status == "FRACTURED":
                     continue
                 ultimate_stress = MaterialManager.get_ultimate_stress(b.material)
                 utilization = calculate_utilization(b)
+                
+                na = truss.nodes[b.node_a]
+                nb = truss.nodes[b.node_b]
+                length_m = math.hypot(nb.x - na.x, nb.y - na.y) * 0.0125
+                current_mass += length_m * b.area * b.density
+                
+                fos = 1.0 / utilization if utilization > 0.0 else float('inf')
+                b.peak_utilization = max(b.peak_utilization, utilization)
+                b.lowest_fos = min(b.lowest_fos, fos)
+                current_max_util = max(current_max_util, utilization)
+                
                 if abs(b.stress) >= ultimate_stress or utilization >= 1.6:
                     beams_to_break.append((b, utilization, b_idx))
+
+            truss.sim_stats["peak_mass"] = max(truss.sim_stats["peak_mass"], current_mass)
+            truss.sim_stats["highest_utilization"] = max(truss.sim_stats["highest_utilization"], current_max_util)
+            sys_fos = 1.0 / current_max_util if current_max_util > 0.0 else float('inf')
+            truss.sim_stats["lowest_fos"] = min(truss.sim_stats["lowest_fos"], sys_fos)
 
             beams_to_break.sort(key=lambda item: (item[1], -item[2]), reverse=True)
 
@@ -646,11 +709,11 @@ while is_running:
     else:
         first_break_gravity = None
         if is_optimizing:
-            if not truss.is_stable or len(truss.beams) == 0:
+            if len(truss.beams) == 0:
                 is_optimizing = False
                 trigger_status("OPTIMIZATION FAILED: INVALID STRUCTURE")
             else:
-                changed = truss.optimize_step(calculate_utilization, solve_truss, gravity_multiplier, allow_profile_switching)
+                changed = truss.optimize_step(calculate_utilization, solve_truss, gravity_multiplier, allow_profile_switching, run_dynamic_eval)
                 if not changed:
                     is_optimizing = False
                     trigger_status("OPTIMIZATION COMPLETE (FOS > 2.0 ACHIEVED)")
@@ -703,26 +766,32 @@ while is_running:
         max_util = max(max_util, calculate_utilization(b))
         
     fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
+    
+    sys_mass = max(truss.sim_stats["peak_mass"], total_mass) if is_physics_playing else total_mass
+    sys_peak_util = max(truss.sim_stats["highest_utilization"], max_util) if is_physics_playing else max_util
+    sys_min_fos = min(truss.sim_stats["lowest_fos"], fos_val) if is_physics_playing else fos_val
+
     if selected_beam_idx is not None and truss.beams[selected_beam_idx].status == "FRACTURED":
         selected_beam_idx = None
     
-    screen.blit(font_body.render(f"Mass: {total_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 350))
+    screen.blit(font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 350))
+    screen.blit(font_body.render(f"Peak Util: {sys_peak_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 370))
     fos_label = font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-    screen.blit(fos_label, (15, 375))
+    screen.blit(fos_label, (15, 390))
     
     if len(truss.beams) == 0:
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MUTED)
-    elif max_util >= 1.6:
+    elif sys_peak_util >= 1.6:
         fos_txt = font_header.render("FAIL", True, COLOR_LOAD)
-    elif max_util >= 1.0:
+    elif sys_peak_util >= 1.0:
         fos_txt = font_header.render("FAIL", True, COLOR_YIELDING)
-    elif max_util == 0.0 or not math.isfinite(fos_val):
+    elif sys_peak_util == 0.0 or not math.isfinite(sys_min_fos):
         fos_txt = font_body.render("N/A", True, COLOR_TEXT_MAIN)
     else:
-        fos_txt = font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
-    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 373))
+        fos_txt = font_header.render(f"{sys_min_fos:.2f}", True, COLOR_ZERO_LOAD if sys_min_fos >= 2.0 else COLOR_MID_LOAD)
+    screen.blit(fos_txt, (15 + fos_label.get_width() + 5, 388))
 
-    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 410), (130, 410), 1)
+    pygame.draw.line(screen, COLOR_UI_BORDER, (10, 420), (130, 420), 1)
 
     pygame.draw.rect(screen, (35, 40, 60) if is_physics_playing else COLOR_BACKGROUND, btn_physics_play, border_radius=4)
     pygame.draw.rect(screen, (100, 150, 255) if is_physics_playing else COLOR_UI_BORDER, btn_physics_play, width=1, border_radius=4)
@@ -901,7 +970,11 @@ while is_running:
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
     if ((selected_node_idx is not None) or (selected_beam_idx is not None)):
-        lines, header_text, is_beam_selected = [], "", selected_beam_idx is not None
+        header_text = ""
+        is_beam_selected = selected_beam_idx is not None
+        lines = []
+        top_lines = []
+        geom_lines = []
         
         if is_beam_selected:
             beam = truss.beams[selected_beam_idx]
@@ -916,32 +989,95 @@ while is_running:
                 
             stress_m_pa = beam.stress / 1e6               
             force_k_n = beam.force / 1000.0               
-            nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
-            utilization_pct = calculate_utilization(beam) * 100.0
             
-            top_lines = [f"Alloy: {beam.material} [M]", f"Force: {abs(force_k_n):.1f} kN", f"Stress: {abs(stress_m_pa):.1f} MPa"]
+            live_util = calculate_utilization(beam)
+            live_util_pct = live_util * 100.0
+            peak_util_pct = max(beam.peak_utilization, live_util) * 100.0 if is_physics_playing else live_util_pct
+            
+            live_fos = 1.0 / live_util if live_util > 0.0 else float('inf')
+            min_fos = min(beam.lowest_fos, live_fos) if is_physics_playing else live_fos
+            
+            live_fos_str = f"{live_fos:.2f}" if math.isfinite(live_fos) else "N/A"
+            min_fos_str = f"{min_fos:.2f}" if math.isfinite(min_fos) else "N/A"
+            
+            nature = "TENSION" if beam.stress > 1e-2 else ("COMPRESSION" if beam.stress < -1e-2 else "NEUTRAL")
+            
+            top_lines = [
+                f"Alloy: {beam.material} [M]",
+                "-",
+                f"Force: {force_k_n:.1f} kN",
+                f"Stress: {stress_m_pa:.1f} MPa",
+                "-",
+                f"Live Util: {live_util_pct:.1f}%",
+                f"Peak Util: {peak_util_pct:.1f}%",
+                f"Live FoS: {live_fos_str}",
+                f"Min FoS: {min_fos_str}",
+                "-",
+                f"Nature: {nature}"
+            ]
+            
             if nature == "COMPRESSION" and length_m > 0:
                 p_crit = (math.pi ** 2 * beam.modulus * beam.inertia) / (length_m ** 2)
-                top_lines.append(f"Buckling Limit: {p_crit / 1000.0:.1f} kN")
-            top_lines.extend([f"Type: {nature}", f"Load Capacity: {utilization_pct:.1f}%", f"Status: {beam.status}"])
+                top_lines.append(f"Buckling Lmt: {p_crit / 1000.0:.1f} kN")
+                
+            top_lines.append(f"Status: {beam.status}")
             
-            geom_lines = [f"Profile: {beam.profile} [P]", f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", f"Thickness: {beam.dim_t * 100.0:.1f} cm", f"Area: {beam.area * 1e4:.1f} cm²", f"Length: {length_m:.2f} m"]
+            geom_lines = [
+                f"Profile: {beam.profile} [P]", 
+                f"Width/Diam: {beam.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", 
+                f"Thickness: {beam.dim_t * 100.0:.1f} cm [ {{ }} / {{ }} ]", 
+                f"Area: {beam.area * 1e4:.1f} cm²",
+                f"Length: {length_m:.2f} m"
+            ]
+            
         elif selected_node_idx is not None:
             node = truss.nodes[selected_node_idx]
             header_text = "STRUCTURAL NODE"
             support_str = "Pin Support" if node.is_anchor_x and node.is_anchor_y else ("Roller Support" if node.is_anchor_y else "Free Joint")
             effective_y = node.load_y
             net_magnitude = math.hypot(node.load_x, effective_y) / 1000.0
-            lines = [f"Type: {support_str}", f"Coords: ({round(node.x)}, {round(node.y)})", f"Net Load: {net_magnitude:.1f} kN", f"Load X: {node.load_x / 1000.0:.1f} kN", f"Load Y: {effective_y / 1000.0:.1f} kN"]
+            
+            live_speed = 0.0
+            if is_physics_playing and physics_sim is not None:
+                for p in physics_sim.particles:
+                    if p.node_idx == selected_node_idx:
+                        live_speed = math.hypot(p.vx, p.vy) * 0.0125
+                        break
+                        
+            peak_speed = node.peak_speed
+            
+            lines = [
+                f"Coordinates: ({round(node.x)}, {round(node.y)})",
+                f"Support Type: {support_str}",
+                "-",
+                f"Net Load: {net_magnitude:.1f} kN",
+                f"Load X: {node.load_x / 1000.0:.1f} kN",
+                f"Load Y: {effective_y / 1000.0:.1f} kN"
+            ]
+            
             if node.is_anchor_x or node.is_anchor_y:
                 net_react = math.hypot(node.rx, node.ry) / 1000.0
-                lines.extend([f"Net React: {net_react:.1f} kN", f"React X: {node.rx / 1000.0:.1f} kN", f"React Y: {node.ry / 1000.0:.1f} kN"])
+                lines.extend([
+                    "-",
+                    f"Net React: {net_react:.1f} kN",
+                    f"React X: {node.rx / 1000.0:.1f} kN",
+                    f"React Y: {node.ry / 1000.0:.1f} kN"
+                ])
+                
+            lines.extend([
+                "-",
+                f"Velocity: {live_speed:.2f} m/s",
+                f"Peak Velocity: {peak_speed:.2f} m/s"
+            ])
 
         if is_beam_selected:
-            hud_w, hud_h = 340, 55 + (len(top_lines) * 24) + 12 + 95
+            hud_w = 340
+            hud_h = 55 + (len([l for l in top_lines if l != "-"]) * 20) + (16 * top_lines.count("-")) + 105
         else:
-            hud_w = max(240, max([font_body.size(line)[0] for line in lines]) + 40) if lines else 240
-            hud_h = 45 + (len(lines) * 24) + (75 if (current_mode == "LOAD" and selected_node_idx is not None) else 0)
+            hud_w = max(260, max([font_body.size(line)[0] for line in lines]) + 40)
+            hud_h = 45 + (len([l for l in lines if l != "-"]) * 20) + (16 * lines.count("-"))
+            if current_mode == "LOAD" and selected_node_idx is not None:
+                hud_h += 75
             
         hud_x = sim_rect.right - hud_w - 15
         hud_surface = pygame.Surface((hud_w, hud_h), pygame.SRCALPHA)
@@ -952,25 +1088,12 @@ while is_running:
         local_y = 40
         if is_beam_selected:
             for line in top_lines:
-                parts = line.split(":", 1)
-                lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
-                hud_surface.blit(lbl_surface, (15, local_y))
-                hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (15 + lbl_surface.get_width() + 4, local_y))
-                local_y += 24
-            local_y += 4
-            pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
-            local_y += 12
-            
-            draw_profile_preview(hud_surface, 15, local_y, 85, 85, truss.beams[selected_beam_idx])
-            sub_y = local_y - 2
-            for line in geom_lines:
-                parts = line.split(":", 1)
-                lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
-                hud_surface.blit(lbl_surface, (115, sub_y))
-                hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (115 + lbl_surface.get_width() + 4, sub_y))
-                sub_y += 17
-        else:
-            for line in lines:
+                if line == "-":
+                    local_y += 4
+                    pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
+                    local_y += 12
+                    continue
+                    
                 if ":" in line:
                     parts = line.split(":", 1)
                     lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
@@ -978,7 +1101,41 @@ while is_running:
                     hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (15 + lbl_surface.get_width() + 4, local_y))
                 else:
                     hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (15, local_y))
-                local_y += 24
+                local_y += 20
+                
+            local_y += 4
+            pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
+            local_y += 12
+            
+            draw_profile_preview(hud_surface, 15, local_y, 85, 85, truss.beams[selected_beam_idx])
+            sub_y = local_y - 2
+            
+            for line in geom_lines:
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
+                    hud_surface.blit(lbl_surface, (115, sub_y))
+                    hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (115 + lbl_surface.get_width() + 4, sub_y))
+                else:
+                    hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (115, sub_y))
+                sub_y += 17
+                
+        else:
+            for line in lines:
+                if line == "-":
+                    local_y += 4
+                    pygame.draw.line(hud_surface, COLOR_UI_BORDER, (10, local_y), (hud_w - 10, local_y), 1)
+                    local_y += 12
+                    continue
+                    
+                if ":" in line:
+                    parts = line.split(":", 1)
+                    lbl_surface = font_body.render(parts[0] + ":", True, COLOR_TEXT_MUTED)
+                    hud_surface.blit(lbl_surface, (15, local_y))
+                    hud_surface.blit(font_body.render(parts[1], True, COLOR_TEXT_MAIN), (15 + lbl_surface.get_width() + 4, local_y))
+                else:
+                    hud_surface.blit(font_body.render(line, True, COLOR_TEXT_MAIN), (15, local_y))
+                local_y += 20
                 
             if current_mode == "LOAD" and selected_node_idx is not None:
                 local_y += 5
@@ -1015,7 +1172,7 @@ while is_running:
     if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
     screen.blit(font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, WINDOW_HEIGHT - 75))
     screen.blit(font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 55))
-    screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] dimensions | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle | Scroll Wheel Zoom | Mid-Click Drag Pan | [H] Home Cam", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
+    screen.blit(font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE]/[Play] Playback | Arrow Keys adjust external node loads | [ / ] width | { / } thickness | [M] alloy | [P] structural profile | [V] Benchmark | [W] Self-Weight Toggle | Scroll Wheel Zoom | Mid-Click Drag Pan | [H] Home Cam", True, COLOR_TEXT_MUTED), (165, WINDOW_HEIGHT - 35))
 
     pygame.display.flip()
     clock.tick(60)
