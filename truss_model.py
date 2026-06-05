@@ -173,11 +173,52 @@ class Cable:
         cable.recalculate_geometry()
         return cable
 
+class Road:
+    def __init__(self, node_a, node_b):
+        self.node_a = node_a
+        self.node_b = node_b
+        self.material = "Asphalt Concrete"
+        self.profile = "Solid Rectangular"
+        self.dim_w = 4.0
+        self.dim_t = 0.25
+        self.area = self.dim_w * self.dim_t
+        self.inertia = (self.dim_w * (self.dim_t ** 3)) / 12.0
+        self.modulus = 30e9
+        self.density = 2400
+        self.force = 0.0
+        self.stress = 0.0
+        self.status = "NORMAL"
+        self.is_broken = False
+        self.broken_at_gravity = None
+        self.peak_utilization_seen = 0.0
+        self.minimum_fos_seen = float('inf')
+        self.history = []
+        self.is_road = True
+
+    def reset_status(self):
+        self.status = "NORMAL"
+        self.is_broken = False
+        self.broken_at_gravity = None
+        self.peak_utilization_seen = 0.0
+        self.minimum_fos_seen = float('inf')
+        self.history.clear()
+
+    def to_dict(self):
+        return {
+            "node_a": self.node_a,
+            "node_b": self.node_b
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(data["node_a"], data["node_b"])
+
 class TrussSystem:
     def __init__(self):
         self.nodes = []
         self.beams = []
         self.cables = []
+        self.roads = []
         self.displacements = None
         self.is_stable = True
         self.active_material = "Steel"
@@ -191,6 +232,7 @@ class TrussSystem:
         self.nodes.clear()
         self.beams.clear()
         self.cables.clear()
+        self.roads.clear()
         self.displacements = None
         self.is_stable = True
         self.sim_stats = {"peak_mass": 0.0, "sim_time": 0.0}
@@ -204,10 +246,10 @@ class TrussSystem:
         for node in self.nodes:
             node.peak_speed = 0.0
             node.trail.clear()
-        for beam in self.beams + self.cables:
-            beam.peak_utilization_seen = 0.0
-            beam.minimum_fos_seen = float('inf')
-            beam.history.clear()
+        for elem in self.beams + self.cables + self.roads:
+            elem.peak_utilization_seen = 0.0
+            elem.minimum_fos_seen = float('inf')
+            elem.history.clear()
 
     def set_material(self, material):
         if material in ["Steel", "Aluminum", "Titanium"]:
@@ -227,15 +269,21 @@ class TrussSystem:
 
     def add_beam(self, node_a, node_b):
         if node_a == node_b: return
-        for elem in self.beams + self.cables:
+        for elem in self.beams + self.cables + self.roads:
             if (elem.node_a == node_a and elem.node_b == node_b) or (elem.node_a == node_b and elem.node_b == node_a): return
         self.beams.append(Beam(node_a, node_b, self.active_material))
 
     def add_cable(self, node_a, node_b):
         if node_a == node_b: return
-        for elem in self.beams + self.cables:
+        for elem in self.beams + self.cables + self.roads:
             if (elem.node_a == node_a and elem.node_b == node_b) or (elem.node_a == node_b and elem.node_b == node_a): return
         self.cables.append(Cable(node_a, node_b, self.active_cable_material))
+
+    def add_road(self, node_a, node_b):
+        if node_a == node_b: return
+        for elem in self.beams + self.cables + self.roads:
+            if (elem.node_a == node_a and elem.node_b == node_b) or (elem.node_a == node_b and elem.node_b == node_a): return
+        self.roads.append(Road(node_a, node_b))
 
     def get_beam_length(self, elem):
         na = self.nodes[elem.node_a]
@@ -249,7 +297,8 @@ class TrussSystem:
             "active_cable_material": self.active_cable_material,
             "nodes": [n.to_dict() for n in self.nodes],
             "beams": [b.to_dict() for b in self.beams],
-            "cables": [c.to_dict() for c in self.cables]
+            "cables": [c.to_dict() for c in self.cables],
+            "roads": [r.to_dict() for r in self.roads]
         }
         try:
             with open(filename, "w") as f:
@@ -272,6 +321,8 @@ class TrussSystem:
                 self.beams.append(Beam.from_dict(beam_data))
             for cable_data in project_data.get("cables", []):
                 self.cables.append(Cable.from_dict(cable_data))
+            for road_data in project_data.get("roads", []):
+                self.roads.append(Road.from_dict(road_data))
             return True
         except (FileNotFoundError, json.JSONDecodeError, KeyError):
             return False
@@ -303,7 +354,7 @@ class TrussSystem:
         solve_truss_fn(self, gravity_multiplier)
         is_mechanism = not self.is_stable
         
-        if len(self.beams) + len(self.cables) == 0:
+        if len(self.beams) + len(self.cables) + len(self.roads) == 0:
             return False
             
         if is_mechanism:

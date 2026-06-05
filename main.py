@@ -9,7 +9,7 @@ from camera import Camera
 from materials import MaterialManager
 from physics_engine import PhysicsSimulation
 from simulation_controller import SimulationController
-from drawing_manager import find_proxy_limit, get_stress_color, draw_force_vector, draw_curved_beam, draw_cable_element
+from drawing_manager import find_proxy_limit, get_stress_color, draw_force_vector, draw_curved_beam, draw_cable_element, draw_road_element
 from ui_panels import UIManager
 from input_handler import InputHandler
 
@@ -48,6 +48,7 @@ app_state = {
     "selected_node_idx": None,
     "selected_beam_idx": None,
     "selected_cable_idx": None,
+    "selected_road_idx": None,
     "is_fullscreen": False,
     "windowed_size": (WINDOW_WIDTH, WINDOW_HEIGHT),
     "request_resize": None,
@@ -69,18 +70,23 @@ def calculate_utilization(elem):
     is_cable = getattr(elem, "is_cable", False)
     if is_cable and elem.force <= 1e-4:
         return 0.0
+
+    is_road = getattr(elem, "is_road", False)
+    if is_road:
+        yield_stress = elem.modulus * 0.005 
+        return abs(elem.stress) / yield_stress if yield_stress > 0 else 0
         
     yield_stress = MaterialManager.get_yield_stress(elem.material)
     yield_util = abs(elem.stress) / yield_stress
     
-    if elem.status == "YIELDING" and not is_cable:
+    if elem.status == "YIELDING" and not is_cable and not is_road:
         limit, proxy_node = find_proxy_limit(elem, truss)
         if proxy_node is not None:
             current_visual_bow = min(35.0, (yield_util - 0.95) * 18.0)
             if current_visual_bow >= limit:
                 return max(yield_util * 1.6, 1.2)
                 
-    if elem.stress < -1e-2 and not is_cable:
+    if elem.stress < -1e-2 and not is_cable and not is_road:
         length_m = truss.get_beam_length(elem)
         if length_m > 0:
             p_crit = MaterialManager.calculate_buckling_load(elem.material, elem.inertia, length_m)
@@ -101,7 +107,7 @@ def run_dynamic_eval(truss_obj, grav_mult):
         sim.step(grav_mult)
         sim.sync_to_truss(truss_obj)
         
-        for elem in truss_obj.beams + truss_obj.cables:
+        for elem in truss_obj.beams + truss_obj.cables + truss_obj.roads:
             if elem.status == "FRACTURED": continue
             util = calculate_utilization(elem)
             fos = 1.0 / util if util > 0.0 else float('inf')
@@ -126,7 +132,7 @@ def compute_dynamic_reactions(truss, gravity_mult):
         fy_net = node.load_y
         
         if truss.self_weight_enabled and gravity_mult > 0.0:
-            for elem in truss.beams + truss.cables:
+            for elem in truss.beams + truss.cables + truss.roads:
                 if elem.status == "FRACTURED": continue
                 if elem.node_a == i or elem.node_b == i:
                     L_m = truss.get_beam_length(elem)
@@ -136,7 +142,7 @@ def compute_dynamic_reactions(truss, gravity_mult):
                         L_m = math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]) * 0.0125
                     fy_net += (L_m * elem.area * elem.density * g) / 2.0
                     
-        for elem in truss.beams + truss.cables:
+        for elem in truss.beams + truss.cables + truss.roads:
             if elem.status == "FRACTURED": continue
             if elem.node_a == i or elem.node_b == i:
                 na = truss.nodes[elem.node_a]
@@ -164,8 +170,9 @@ def build_ui_rects(w, h):
         "btn_node": pygame.Rect(15, 125, 110, 35), 
         "btn_beam": pygame.Rect(15, 170, 110, 35), 
         "btn_cable": pygame.Rect(15, 215, 110, 35), 
-        "btn_load": pygame.Rect(15, 260, 110, 35), 
-        "btn_benchmark": pygame.Rect(15, 305, 110, 35),
+        "btn_road": pygame.Rect(15, 260, 110, 35),
+        "btn_load": pygame.Rect(15, 305, 110, 35), 
+        "btn_benchmark": pygame.Rect(15, 350, 110, 35),
         "btn_play": pygame.Rect(15, h - 220, 34, 30), 
         "btn_pause": pygame.Rect(53, h - 220, 34, 30), 
         "btn_reset": pygame.Rect(91, h - 220, 34, 30),
@@ -229,13 +236,18 @@ while app_state["is_running"]:
                 current_mass = 0.0
                 current_max_util = 0.0
                 
-                for e_idx, elem in enumerate(truss.beams + truss.cables):
+                for e_idx, elem in enumerate(truss.beams + truss.cables + truss.roads):
                     if elem.status == "FRACTURED":
                         elem.history.append(0.0)
                         if len(elem.history) > 300: elem.history.pop(0)
                         continue
-                        
-                    ultimate_stress = MaterialManager.get_ultimate_stress(elem.material)
+                    
+                    is_road = getattr(elem, "is_road", False)    
+                    if is_road:
+                        ultimate_stress = elem.modulus * 0.01 
+                    else:
+                        ultimate_stress = MaterialManager.get_ultimate_stress(elem.material)
+                    
                     utilization = calculate_utilization(elem)
                     
                     elem.history.append(utilization * 100.0)
@@ -274,11 +286,11 @@ while app_state["is_running"]:
                     ax, ay = truss.nodes[elem.node_a].x, truss.nodes[elem.node_a].y
                     bx, by = truss.nodes[elem.node_b].x, truss.nodes[elem.node_b].y
                     mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                    thick = max(2, min(14, int((elem.area / 2.5e-3) * 4.0)))
+                    thick = max(2, int(5 * camera.zoom_scale))
                     app_state["fading_beams"].append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
                     app_state["fading_beams"].append([mx + 2, my, bx, by, thick, 1.0, -1.5])
                     
-                for elem in truss.beams + truss.cables:
+                for elem in truss.beams + truss.cables + truss.roads:
                     if elem.status == "FRACTURED": continue
                     utilization = calculate_utilization(elem)
                     if utilization >= 1.0 and elem.status == "NORMAL":
@@ -291,7 +303,7 @@ while app_state["is_running"]:
     else:
         app_state["first_break_gravity"] = None
         if app_state["is_optimizing"]:
-            if len(truss.beams) + len(truss.cables) == 0:
+            if len(truss.beams) + len(truss.cables) + len(truss.roads) == 0:
                 app_state["is_optimizing"] = False
                 trigger_status("OPTIMIZATION FAILED: INVALID STRUCTURE")
             else:
@@ -302,7 +314,7 @@ while app_state["is_running"]:
                 else:
                     pygame.time.delay(90)
         else:
-            for elem in truss.beams + truss.cables:
+            for elem in truss.beams + truss.cables + truss.roads:
                 elem.reset_status()
             solve_truss(truss, 0.0)
 
@@ -355,10 +367,25 @@ while app_state["is_running"]:
                 curr_g_y += GRID_SIZE
 
     node_has_connections = [False] * len(truss.nodes)
-    for elem in truss.beams + truss.cables:
+    for elem in truss.beams + truss.cables + truss.roads:
         if elem.status != "FRACTURED":
             node_has_connections[elem.node_a] = True
             node_has_connections[elem.node_b] = True
+
+    for i, road in enumerate(truss.roads):
+        if road.status == "FRACTURED": continue
+        ax, ay = truss.nodes[road.node_a].x, truss.nodes[road.node_a].y
+        bx, by = truss.nodes[road.node_b].x, truss.nodes[road.node_b].y
+
+        sx, sy = camera.to_screen(ax, ay)
+        local_ax = round(sx-sim_rect.left)
+        local_ay = round(sy-sim_rect.top)
+        sx, sy = camera.to_screen(bx, by)
+        local_bx = round(sx-sim_rect.left)
+        local_by = round(sy-sim_rect.top)
+
+        thickness_pixels = max(2, int(5 * camera.zoom_scale))
+        draw_road_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, road, thickness_pixels, get_stress_color(road, truss), i == app_state["selected_road_idx"])
 
     for i, beam in enumerate(truss.beams):
         if beam.status == "FRACTURED": continue
@@ -372,7 +399,7 @@ while app_state["is_running"]:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        thickness_pixels = max(1, int(max(2, min(16, int(beam.dim_w * 140.0))) * camera.zoom_scale))
+        thickness_pixels = max(2, int(5 * camera.zoom_scale))
         draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, get_stress_color(beam, truss), i == app_state["selected_beam_idx"], camera.zoom_scale, truss)
 
     for i, cable in enumerate(truss.cables):
@@ -387,9 +414,8 @@ while app_state["is_running"]:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        thickness_pixels = max(1, int(max(2, min(16, int(cable.dim_w * 140.0))) * camera.zoom_scale))
+        thickness_pixels = max(2, int(5 * camera.zoom_scale))
         draw_cable_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, cable, thickness_pixels, get_stress_color(cable, truss), i == app_state["selected_cable_idx"], camera.zoom_scale, truss, sim_ctrl)
-
 
     for fb in app_state["fading_beams"]:
         alpha = int(fb[5] * 255)
@@ -429,7 +455,7 @@ while app_state["is_running"]:
         
         if truss.self_weight_enabled and sim_ctrl.state != "EDIT" and app_state["gravity_multiplier"] > 0.0:
             g = 9.81 * app_state["gravity_multiplier"]
-            for elem in truss.beams + truss.cables:
+            for elem in truss.beams + truss.cables + truss.roads:
                 if elem.status == "FRACTURED": continue
                 if elem.node_a == i or elem.node_b == i:
                     total_fy += (truss.get_beam_length(elem) * elem.area * elem.density * g) / 2.0
@@ -478,9 +504,9 @@ while app_state["is_running"]:
     if app_state["show_benchmark_hud"] and truss.is_stable:
         ui_manager.draw_benchmark_hud(screen, truss)
 
-    if ((app_state["selected_node_idx"] is not None) or (app_state["selected_beam_idx"] is not None) or (app_state["selected_cable_idx"] is not None)):
+    if ((app_state["selected_node_idx"] is not None) or (app_state["selected_beam_idx"] is not None) or (app_state["selected_cable_idx"] is not None) or (app_state["selected_road_idx"] is not None)):
         app_state["input_active"], app_state["input_type"], app_state["input_buffer"] = ui_manager.draw_selection_hud(
-            screen, truss, sim_ctrl, app_state["selected_node_idx"], app_state["selected_beam_idx"], app_state["selected_cable_idx"],
+            screen, truss, sim_ctrl, app_state["selected_node_idx"], app_state["selected_beam_idx"], app_state["selected_cable_idx"], app_state["selected_road_idx"],
             app_state["current_mode"], app_state["input_active"], app_state["input_type"], app_state["input_buffer"], calculate_utilization
         )
 

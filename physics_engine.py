@@ -40,7 +40,7 @@ class PhysicsSimulation:
         num_nodes = len(truss.nodes)
         node_masses = [0.1 for _ in range(num_nodes)]
 
-        for elem in truss.beams + truss.cables:
+        for elem in truss.beams + truss.cables + truss.roads:
             if elem.status == "FRACTURED":
                 continue
             elem_mass = truss.get_beam_length(elem) * elem.area * elem.density
@@ -60,7 +60,7 @@ class PhysicsSimulation:
             )
             self.particles.append(p)
 
-        for elem in truss.beams + truss.cables:
+        for elem in truss.beams + truss.cables + truss.roads:
             if elem.status == "FRACTURED":
                 continue
             dx = truss.nodes[elem.node_b].x - truss.nodes[elem.node_a].x

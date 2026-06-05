@@ -45,6 +45,9 @@ def get_stress_color(elem, truss):
     if elem.force == 0.0:
         return (180, 180, 185)
         
+    if getattr(elem, "is_road", False):
+        return COLOR_ROAD
+
     if elem.status == "YIELDING":
         limit, proxy_node = find_proxy_limit(elem, truss)
         if proxy_node is not None:
@@ -137,6 +140,12 @@ def draw_profile_preview(surf, x, y, width, height, beam):
             pygame.draw.circle(surf, color_fill, (center_x, center_y), radius)
             pygame.draw.circle(surf, color_line, (center_x, center_y), radius, width=1)
             pygame.draw.circle(surf, (12, 12, 14), (center_x, center_y), max(1, radius // 6))
+    elif beam.profile == "Solid Rectangular":
+        w = max(6, min(width - 12, int((beam.dim_w/10.0) * scale)))
+        h = max(4, int((beam.dim_t/10.0) * scale))
+        ox, oy = center_x - w // 2, center_y - h // 2
+        pygame.draw.rect(surf, color_fill, (ox, oy, w, h))
+        pygame.draw.rect(surf, color_line, (ox, oy, w, h), width=1)
 
 def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selected, zoom_scale, truss):
     if beam.status != "YIELDING" or beam.force == 0.0:
@@ -218,3 +227,8 @@ def draw_cable_element(surface, ax, ay, bx, by, cable, thickness, color, is_sele
         if is_selected:
             pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
         pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
+
+def draw_road_element(surface, ax, ay, bx, by, road, thickness, color, is_selected):
+    if is_selected:
+        pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+    pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)

@@ -18,7 +18,8 @@ class UIManager:
             (ui_rects["btn_node"], "2. + Node", "NODE"), 
             (ui_rects["btn_beam"], "3. + Beam", "BEAM"), 
             (ui_rects["btn_cable"], "4. + Cable", "CABLE"), 
-            (ui_rects["btn_load"], "5. + Load", "LOAD")
+            (ui_rects["btn_road"], "5. + Road", "ROAD"),
+            (ui_rects["btn_load"], "6. + Load", "LOAD")
         ]
         for btn, label, mode in modes_list:
             pygame.draw.rect(screen, COLOR_UI_BORDER if current_mode == mode and sim_ctrl.state == "EDIT" else COLOR_BACKGROUND, btn, border_radius=4)
@@ -26,13 +27,13 @@ class UIManager:
 
         btn_benchmark = ui_rects["btn_benchmark"]
         pygame.draw.rect(screen, COLOR_UI_BORDER if show_benchmark_hud and sim_ctrl.state == "EDIT" else COLOR_BACKGROUND, btn_benchmark, border_radius=4)
-        screen.blit(self.font_body.render("6. Benchmark", True, COLOR_TEXT_MAIN), (btn_benchmark.x + 12, btn_benchmark.y + 10))
+        screen.blit(self.font_body.render("7. Benchmark", True, COLOR_TEXT_MAIN), (btn_benchmark.x + 12, btn_benchmark.y + 10))
 
-        pygame.draw.line(screen, COLOR_UI_BORDER, (10, 355), (130, 355), 1)
-        screen.blit(self.font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 370))
+        pygame.draw.line(screen, COLOR_UI_BORDER, (10, 400), (130, 400), 1)
+        screen.blit(self.font_header.render("SYSTEM STATS", True, COLOR_TEXT_MAIN), (15, 415))
         
         total_mass, max_util = 0.0, 0.0
-        for elem in truss.beams + truss.cables:
+        for elem in truss.beams + truss.cables + truss.roads:
             if elem.status == "FRACTURED": continue
             
             if sim_ctrl.state != "EDIT" and sim_ctrl.saved_truss_state is not None:
@@ -43,13 +44,18 @@ class UIManager:
                 length_m = truss.get_beam_length(elem)
                 
             total_mass += length_m * elem.area * elem.density
-            max_util = max(max_util, calc_util_fn(elem))
+            if not getattr(elem, "is_road", False):
+                max_util = max(max_util, calc_util_fn(elem))
+            else:
+                yield_stress = elem.modulus * 0.005 
+                road_util = abs(elem.stress) / yield_stress if yield_stress > 0 else 0
+                max_util = max(max_util, road_util)
             
         fos_val = 1.0 / max_util if max_util > 0.0 else float('inf')
         
         sys_mass = max(truss.sim_stats["peak_mass"], total_mass) if sim_ctrl.state != "EDIT" else total_mass
         sys_time = truss.sim_stats.get("sim_time", 0.0)
-        failed_count = sum(1 for e in truss.beams + truss.cables if e.status == "FRACTURED")
+        failed_count = sum(1 for e in truss.beams + truss.cables + truss.roads if e.status == "FRACTURED")
         sys_max_vel = max([n.peak_speed for n in truss.nodes] + [0.0])
         
         peak_rec = truss.peak_utilization_recorded
@@ -61,17 +67,17 @@ class UIManager:
         else:
             peak_str = "N/A"
             
-        screen.blit(self.font_body.render(f"Time: {sys_time:.2f} s", True, COLOR_TEXT_MUTED), (15, 390))
-        screen.blit(self.font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 405))
-        screen.blit(self.font_body.render(f"Failed: {failed_count}", True, COLOR_TEXT_MUTED), (15, 420))
-        screen.blit(self.font_body.render(f"Max Vel: {sys_max_vel:.2f} m/s", True, COLOR_TEXT_MUTED), (15, 435))
-        screen.blit(self.font_body.render(f"Live Util: {max_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 450))
-        screen.blit(self.font_body.render(f"Peak Util: {peak_str}", True, COLOR_TEXT_MUTED), (15, 465))
+        screen.blit(self.font_body.render(f"Time: {sys_time:.2f} s", True, COLOR_TEXT_MUTED), (15, 435))
+        screen.blit(self.font_body.render(f"Mass: {sys_mass:.1f} kg", True, COLOR_TEXT_MUTED), (15, 450))
+        screen.blit(self.font_body.render(f"Failed: {failed_count}", True, COLOR_TEXT_MUTED), (15, 465))
+        screen.blit(self.font_body.render(f"Max Vel: {sys_max_vel:.2f} m/s", True, COLOR_TEXT_MUTED), (15, 480))
+        screen.blit(self.font_body.render(f"Live Util: {max_util*100.0:.1f}%", True, COLOR_TEXT_MUTED), (15, 495))
+        screen.blit(self.font_body.render(f"Peak Util: {peak_str}", True, COLOR_TEXT_MUTED), (15, 510))
         
         l_fos_lbl = self.font_body.render("Live FoS:", True, COLOR_TEXT_MUTED)
-        screen.blit(l_fos_lbl, (15, 480))
+        screen.blit(l_fos_lbl, (15, 525))
         
-        if len(truss.beams) + len(truss.cables) == 0:
+        if len(truss.beams) + len(truss.cables) + len(truss.roads) == 0:
             l_fos_txt = self.font_body.render("N/A", True, COLOR_TEXT_MUTED)
         elif max_util >= 1.6:
             l_fos_txt = self.font_header.render("FAIL", True, COLOR_LOAD)
@@ -81,12 +87,12 @@ class UIManager:
             l_fos_txt = self.font_body.render("N/A", True, COLOR_TEXT_MAIN)
         else:
             l_fos_txt = self.font_header.render(f"{fos_val:.2f}", True, COLOR_ZERO_LOAD if fos_val >= 2.0 else COLOR_MID_LOAD)
-        screen.blit(l_fos_txt, (15 + l_fos_lbl.get_width() + 5, 478))
+        screen.blit(l_fos_txt, (15 + l_fos_lbl.get_width() + 5, 523))
 
         m_fos_lbl = self.font_body.render("Min FoS:", True, COLOR_TEXT_MUTED)
-        screen.blit(m_fos_lbl, (15, 495))
+        screen.blit(m_fos_lbl, (15, 540))
         
-        if len(truss.beams) + len(truss.cables) == 0:
+        if len(truss.beams) + len(truss.cables) + len(truss.roads) == 0:
             m_fos_txt = self.font_body.render("N/A", True, COLOR_TEXT_MUTED)
         elif peak_rec >= 1.6 and (has_history or sim_ctrl.state != "EDIT"):
             m_fos_txt = self.font_header.render("FAIL", True, COLOR_LOAD)
@@ -98,7 +104,7 @@ class UIManager:
             m_fos_txt = self.font_body.render("N/A", True, COLOR_TEXT_MAIN)
         else:
             m_fos_txt = self.font_header.render(f"{min_rec:.2f}", True, COLOR_ZERO_LOAD if min_rec >= 2.0 else COLOR_MID_LOAD)
-        screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 493))
+        screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 538))
 
         pygame.draw.line(screen, COLOR_UI_BORDER, (10, ui_rects["btn_play"].y - 10), (130, ui_rects["btn_play"].y - 10), 1)
 
@@ -206,9 +212,9 @@ class UIManager:
             bhud_surface.blit(self.font_body.render("BENCHMARK CASE MODIFIED OR INVALID", True, COLOR_MAX_LOAD), (15, 14))
             screen.blit(bhud_surface, (bhud_x, bhud_y))
 
-    def draw_selection_hud(self, screen, truss, sim_ctrl, selected_node_idx, selected_beam_idx, selected_cable_idx, current_mode, input_active, input_type, input_buffer, calc_util_fn):
+    def draw_selection_hud(self, screen, truss, sim_ctrl, selected_node_idx, selected_beam_idx, selected_cable_idx, selected_road_idx, current_mode, input_active, input_type, input_buffer, calc_util_fn):
         header_text = ""
-        is_elem_selected = selected_beam_idx is not None or selected_cable_idx is not None
+        is_elem_selected = selected_beam_idx is not None or selected_cable_idx is not None or selected_road_idx is not None
         lines = []
         top_lines = []
         geom_lines = []
@@ -217,11 +223,15 @@ class UIManager:
             if selected_beam_idx is not None:
                 elem = truss.beams[selected_beam_idx]
                 header_text = "STRUCTURAL ELEMENT"
-            else:
+            elif selected_cable_idx is not None:
                 elem = truss.cables[selected_cable_idx]
                 header_text = "CABLE ELEMENT"
+            else:
+                elem = truss.roads[selected_road_idx]
+                header_text = "ROAD DECK ELEMENT"
             
             is_cable = getattr(elem, "is_cable", False)
+            is_road = getattr(elem, "is_road", False)
 
             if sim_ctrl.state != "EDIT" and sim_ctrl.saved_truss_state is not None:
                 na = sim_ctrl.saved_truss_state[elem.node_a]
@@ -233,7 +243,12 @@ class UIManager:
             stress_m_pa = elem.stress / 1e6               
             force_k_n = elem.force / 1000.0               
             
-            live_util = calc_util_fn(elem)
+            if is_road:
+                yield_stress = elem.modulus * 0.005 
+                live_util = abs(elem.stress) / yield_stress if yield_stress > 0 else 0
+            else:
+                live_util = calc_util_fn(elem)
+                
             live_util_pct = live_util * 100.0
             
             e_peak = elem.peak_utilization_seen
@@ -256,7 +271,7 @@ class UIManager:
                 nature = "TENSION" if elem.stress > 1e-2 else ("COMPRESSION" if elem.stress < -1e-2 else "NEUTRAL")
             
             top_lines = [
-                f"Material: {elem.material} [M]",
+                f"Material: {elem.material}" + (" [M]" if not is_road else ""),
                 "-",
                 f"Force: {force_k_n:.1f} kN",
                 f"Stress: {stress_m_pa:.1f} MPa",
@@ -269,7 +284,7 @@ class UIManager:
                 f"Nature: {nature}"
             ]
             
-            if nature == "COMPRESSION" and length_m > 0 and not is_cable:
+            if nature == "COMPRESSION" and length_m > 0 and not is_cable and not is_road:
                 p_crit = (math.pi ** 2 * elem.modulus * elem.inertia) / (length_m ** 2)
                 top_lines.append(f"Buckling Lmt: {p_crit / 1000.0:.1f} kN")
                 
@@ -279,6 +294,14 @@ class UIManager:
                 geom_lines = [
                     f"Profile: {elem.profile}", 
                     f"Diameter: {elem.dim_w * 100.0:.1f} cm [ [ ] / [ ] ]", 
+                    f"Area: {elem.area * 1e4:.1f} cm²",
+                    f"Length: {length_m:.2f} m"
+                ]
+            elif is_road:
+                geom_lines = [
+                    f"Profile: {elem.profile}", 
+                    f"Width: {elem.dim_w:.2f} m", 
+                    f"Thickness: {elem.dim_t * 100.0:.1f} cm", 
                     f"Area: {elem.area * 1e4:.1f} cm²",
                     f"Length: {length_m:.2f} m"
                 ]

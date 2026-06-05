@@ -7,8 +7,8 @@ def solve_truss(truss, gravity_multiplier=0.0):
         node.rx = 0.0
         node.ry = 0.0
         
-    if num_nodes < 2 or (len(truss.beams) + len(truss.cables) == 0):
-        for elem in truss.beams + truss.cables:
+    if num_nodes < 2 or (len(truss.beams) + len(truss.cables) + len(truss.roads) == 0):
+        for elem in truss.beams + truss.cables + truss.roads:
             elem.force = 0.0
             elem.stress = 0.0
         truss.displacements = None
@@ -26,7 +26,7 @@ def solve_truss(truss, gravity_multiplier=0.0):
         F_global = np.zeros(matrix_dim)
 
         node_has_connections = [False] * num_nodes
-        for elem in truss.beams + truss.cables:
+        for elem in truss.beams + truss.cables + truss.roads:
             if elem.status == "FRACTURED": continue
             node_has_connections[elem.node_a] = True
             node_has_connections[elem.node_b] = True
@@ -35,7 +35,7 @@ def solve_truss(truss, gravity_multiplier=0.0):
             F_global[i * 2] = node.load_x
             F_global[i * 2 + 1] = -node.load_y
 
-        for elem_idx, elem in enumerate(truss.beams + truss.cables):
+        for elem_idx, elem in enumerate(truss.beams + truss.cables + truss.roads):
             if elem.status == "FRACTURED": continue  
                 
             idx_a = elem.node_a
@@ -90,7 +90,7 @@ def solve_truss(truss, gravity_multiplier=0.0):
         free_dofs = [d for d in range(matrix_dim) if d not in fixed_dofs]
         
         if len(free_dofs) == 0:
-            for elem in truss.beams + truss.cables:
+            for elem in truss.beams + truss.cables + truss.roads:
                 elem.force = 0.0
                 elem.stress = 0.0
             truss.displacements = np.zeros(matrix_dim)
@@ -107,7 +107,7 @@ def solve_truss(truss, gravity_multiplier=0.0):
             u_free = np.linalg.solve(K_free, F_free)
             truss.is_stable = True
         except (np.linalg.LinAlgError, ValueError):
-            for elem in truss.beams + truss.cables:
+            for elem in truss.beams + truss.cables + truss.roads:
                 elem.force = 0.0
                 elem.stress = 0.0
             truss.displacements = None
@@ -124,7 +124,7 @@ def solve_truss(truss, gravity_multiplier=0.0):
             if node.is_anchor_y: node.ry = -F_reactions[i * 2 + 1]
 
         cables_changed = False
-        for elem_idx, elem in enumerate(truss.beams + truss.cables):
+        for elem_idx, elem in enumerate(truss.beams + truss.cables + truss.roads):
             if elem.status == "FRACTURED":
                 elem.force = 0.0
                 elem.stress = 0.0

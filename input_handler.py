@@ -1,7 +1,7 @@
 import pygame
 import math
 import json
-from truss_model import TrussSystem, Node, Beam, Cable
+from truss_model import TrussSystem, Node, Beam, Cable, Road
 from constants import CLICK_TOLERANCE, GRID_SIZE, sim_rect
 from serialization import save_project_dialog, load_project_dialog
 from materials import MaterialManager
@@ -13,7 +13,8 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
         "active_material": base_truss.active_material,
         "nodes": [n.to_dict() for n in base_truss.nodes],
         "beams": [b.to_dict() for b in base_truss.beams],
-        "cables": [c.to_dict() for c in base_truss.cables]
+        "cables": [c.to_dict() for c in base_truss.cables],
+        "roads": [r.to_dict() for r in base_truss.roads]
     })
     
     run_histories = []
@@ -27,6 +28,8 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
         for b_data in data["beams"]: test_truss.beams.append(Beam.from_dict(b_data))
         if "cables" in data:
             for c_data in data["cables"]: test_truss.cables.append(Cable.from_dict(c_data))
+        if "roads" in data:
+            for r_data in data["roads"]: test_truss.roads.append(Road.from_dict(r_data))
         
         sim = PhysicsSimulation(test_truss, gravity_mult=1.0, enable_gravity=test_truss.self_weight_enabled)
         
@@ -45,10 +48,14 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
                     c.beam.force = c.beam.stress * c.beam.area
             
             beams_to_break = []
-            for b_idx, b in enumerate(test_truss.beams + test_truss.cables):
+            for b_idx, b in enumerate(test_truss.beams + test_truss.cables + test_truss.roads):
                 if b.status == "FRACTURED": continue
-                ult = MaterialManager.get_ultimate_stress(b.material)
-                yield_s = MaterialManager.get_yield_stress(b.material)
+                if getattr(b, "is_road", False):
+                    ult = b.modulus * 0.01 
+                    yield_s = b.modulus * 0.005
+                else:
+                    ult = MaterialManager.get_ultimate_stress(b.material)
+                    yield_s = MaterialManager.get_yield_stress(b.material)
                 util = abs(b.stress) / yield_s if yield_s > 0 else 0
                 if abs(b.stress) >= ult or util >= 1.6:
                     beams_to_break.append((b, util, b_idx))
@@ -58,7 +65,7 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
                 b.status = "FRACTURED"
                 sim.remove_constraints_for_beam(b)
                 
-            frame_hash = sum([round(p.x + p.y + p.vx + p.vy, 4) for p in sim.particles]) + sum([1 for b in test_truss.beams + test_truss.cables if b.status == "FRACTURED"])
+            frame_hash = sum([round(p.x + p.y + p.vx + p.vy, 4) for p in sim.particles]) + sum([1 for b in test_truss.beams + test_truss.cables + test_truss.roads if b.status == "FRACTURED"])
             history.append(frame_hash)
             
         run_histories.append(history)
@@ -127,6 +134,7 @@ class InputHandler:
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
                             app_state["selected_cable_idx"] = None
+                            app_state["selected_road_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["gravity_multiplier"] = 0.0
                             app_state["first_break_gravity"] = None
@@ -177,6 +185,7 @@ class InputHandler:
                         app_state["selected_node_idx"] = None
                         app_state["selected_beam_idx"] = None
                         app_state["selected_cable_idx"] = None
+                        app_state["selected_road_idx"] = None
                         app_state["gravity_multiplier"] = 0.0
                         app_state["first_break_gravity"] = None
                         app_state["fading_beams"].clear()
@@ -195,6 +204,7 @@ class InputHandler:
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
                             app_state["selected_cable_idx"] = None
+                            app_state["selected_road_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["first_break_gravity"] = None
                             app_state["is_optimizing"] = False
@@ -261,16 +271,24 @@ class InputHandler:
                             truss.cables.pop(app_state["selected_cable_idx"])
                             app_state["selected_cable_idx"] = None
                             app_state["first_break_gravity"] = None
+                        elif app_state["selected_road_idx"] is not None:
+                            truss.roads.pop(app_state["selected_road_idx"])
+                            app_state["selected_road_idx"] = None
+                            app_state["first_break_gravity"] = None
                         elif app_state["selected_node_idx"] is not None:
                             idx = app_state["selected_node_idx"]
                             truss.beams = [b for b in truss.beams if b.node_a != idx and b.node_b != idx]
                             truss.cables = [c for c in truss.cables if c.node_a != idx and c.node_b != idx]
+                            truss.roads = [r for r in truss.roads if r.node_a != idx and r.node_b != idx]
                             for b in truss.beams:
                                 if b.node_a > idx: b.node_a -= 1
                                 if b.node_b > idx: b.node_b -= 1
                             for c in truss.cables:
                                 if c.node_a > idx: c.node_a -= 1
                                 if c.node_b > idx: c.node_b -= 1
+                            for r in truss.roads:
+                                if r.node_a > idx: r.node_a -= 1
+                                if r.node_b > idx: r.node_b -= 1
                             truss.nodes.pop(idx)
                             app_state["selected_node_idx"] = None
                             app_state["first_break_gravity"] = None
@@ -324,6 +342,8 @@ class InputHandler:
                         app_state["current_mode"], app_state["input_active"] = "BEAM", False
                     elif ui_rects["btn_cable"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
                         app_state["current_mode"], app_state["input_active"] = "CABLE", False
+                    elif ui_rects["btn_road"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
+                        app_state["current_mode"], app_state["input_active"] = "ROAD", False
                     elif ui_rects["btn_load"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
                         app_state["current_mode"], app_state["input_active"] = "LOAD", False
                     elif ui_rects["btn_benchmark"].collidepoint(event.pos) and sim_ctrl.state == "EDIT":
@@ -333,6 +353,7 @@ class InputHandler:
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
                             app_state["selected_cable_idx"] = None
+                            app_state["selected_road_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["first_break_gravity"] = None
                             app_state["is_optimizing"] = False
@@ -360,10 +381,12 @@ class InputHandler:
                         app_state["selected_node_idx"] = clicked_node_idx
                         app_state["selected_beam_idx"] = None
                         app_state["selected_cable_idx"] = None
+                        app_state["selected_road_idx"] = None
                     elif app_state["current_mode"] == "SELECT":
                         app_state["selected_node_idx"] = clicked_node_idx
                         app_state["selected_beam_idx"] = None
                         app_state["selected_cable_idx"] = None
+                        app_state["selected_road_idx"] = None
                         if clicked_node_idx is None:
                             found = False
                             for i, b in enumerate(truss.beams):
@@ -377,6 +400,13 @@ class InputHandler:
                                     if c.status == "FRACTURED": continue
                                     if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[c.node_a].x, truss.nodes[c.node_a].y, truss.nodes[c.node_b].x, truss.nodes[c.node_b].y) < (8 / camera.zoom_scale):
                                         app_state["selected_cable_idx"] = i
+                                        found = True
+                                        break
+                            if not found:
+                                for i, r in enumerate(truss.roads):
+                                    if r.status == "FRACTURED": continue
+                                    if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[r.node_a].x, truss.nodes[r.node_a].y, truss.nodes[r.node_b].x, truss.nodes[r.node_b].y) < (12 / camera.zoom_scale):
+                                        app_state["selected_road_idx"] = i
                                         break
                     elif app_state["current_mode"] == "NODE":
                         sim_mouse_x = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_x))
@@ -384,15 +414,17 @@ class InputHandler:
                         truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=app_state["grid_enabled"], grid_size=GRID_SIZE)
                         app_state["first_break_gravity"] = None
                         app_state["show_benchmark_hud"] = False
-                    elif app_state["current_mode"] in ["BEAM", "CABLE"]:
+                    elif app_state["current_mode"] in ["BEAM", "CABLE", "ROAD"]:
                         if clicked_node_idx is not None:
                             if app_state["active_node_bnd"] is None: 
                                 app_state["active_node_bnd"] = clicked_node_idx
                             else:
                                 if app_state["current_mode"] == "BEAM":
                                     truss.add_beam(app_state["active_node_bnd"], clicked_node_idx)
-                                else:
+                                elif app_state["current_mode"] == "CABLE":
                                     truss.add_cable(app_state["active_node_bnd"], clicked_node_idx)
+                                elif app_state["current_mode"] == "ROAD":
+                                    truss.add_road(app_state["active_node_bnd"], clicked_node_idx)
                                 app_state["active_node_bnd"] = None
                                 app_state["first_break_gravity"] = None
                                 app_state["show_benchmark_hud"] = False
