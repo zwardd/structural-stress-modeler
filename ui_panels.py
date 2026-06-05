@@ -9,7 +9,7 @@ class UIManager:
         self.font_header = font_header
         self.font_body = font_body
 
-    def draw_sidebar(self, screen, truss, sim_ctrl, current_mode, show_benchmark_hud, is_optimizing, trails_enabled, allow_profile_switching, ui_rects, calc_util_fn):
+    def draw_sidebar(self, screen, truss, sim_ctrl, current_mode, show_benchmark_hud, is_optimizing, trails_enabled, allow_profile_switching, ui_rects, calc_util_fn, show_stress_heatmap):
         pygame.draw.rect(screen, COLOR_PANEL_BG, ui_rects["sidebar"])
         pygame.draw.line(screen, COLOR_UI_BORDER, (140, 0), (140, screen.get_height()), 2)
         
@@ -105,6 +105,12 @@ class UIManager:
         else:
             m_fos_txt = self.font_header.render(f"{min_rec:.2f}", True, COLOR_ZERO_LOAD if min_rec >= 2.0 else COLOR_MID_LOAD)
         screen.blit(m_fos_txt, (15 + m_fos_lbl.get_width() + 5, 538))
+
+        btn_stress = ui_rects["btn_stress"]
+        pygame.draw.rect(screen, (40, 55, 45) if show_stress_heatmap else COLOR_BACKGROUND, btn_stress, border_radius=4)
+        pygame.draw.rect(screen, COLOR_PLAY_GREEN if show_stress_heatmap else COLOR_UI_BORDER, btn_stress, width=1, border_radius=4)
+        s_label = "Stress: ON" if show_stress_heatmap else "Stress: OFF"
+        screen.blit(self.font_body.render(s_label, True, COLOR_TEXT_MAIN), (btn_stress.x + 16, btn_stress.y + 6))
 
         pygame.draw.line(screen, COLOR_UI_BORDER, (10, ui_rects["btn_play"].y - 10), (130, ui_rects["btn_play"].y - 10), 1)
 
@@ -484,5 +490,5 @@ class UIManager:
         grav_msg = f"GRAVITY LOAD MULTIPLIER: {gravity_multiplier:.1f}x  [ - ] / [ + ]"
         if first_break_gravity is not None and math.isclose(gravity_multiplier, first_break_gravity): grav_msg += " (CRITICAL POINT LOCKED)"
         screen.blit(self.font_body.render(grav_msg, True, COLOR_TEXT_MAIN), (165, h - 75))
-        screen.blit(self.font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} [G] | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, h - 55))
+        screen.blit(self.font_body.render(f"GRID SNAP: {'ENABLED (20px)' if grid_enabled else 'DISABLED'} | SAVE: [Ctrl+S] | LOAD: [Ctrl+O]", True, COLOR_TEXT_MUTED), (165, h - 55))
         screen.blit(self.font_body.render("Keys/Buttons: [1-3] Material | [R] Reset | [SPACE] Playback | Arrow Keys adjust external node loads | [ / ] width | { / } thickness | [M] material | [P] profile | [W] Self-Weight | [H] Home Cam | [F11] Fullscreen", True, COLOR_TEXT_MUTED), (165, h - 35))

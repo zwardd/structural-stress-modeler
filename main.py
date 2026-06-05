@@ -40,6 +40,7 @@ app_state = {
     "gravity_multiplier": 0.0,
     "first_break_gravity": None,
     "show_benchmark_hud": False,
+    "show_stress_heatmap": False,
     "input_buffer": "",
     "input_active": False,
     "input_type": "Y",
@@ -173,6 +174,7 @@ def build_ui_rects(w, h):
         "btn_road": pygame.Rect(15, 260, 110, 35),
         "btn_load": pygame.Rect(15, 305, 110, 35), 
         "btn_benchmark": pygame.Rect(15, 350, 110, 35),
+        "btn_stress": pygame.Rect(15, h - 260, 110, 30),
         "btn_play": pygame.Rect(15, h - 220, 34, 30), 
         "btn_pause": pygame.Rect(53, h - 220, 34, 30), 
         "btn_reset": pygame.Rect(91, h - 220, 34, 30),
@@ -286,7 +288,7 @@ while app_state["is_running"]:
                     ax, ay = truss.nodes[elem.node_a].x, truss.nodes[elem.node_a].y
                     bx, by = truss.nodes[elem.node_b].x, truss.nodes[elem.node_b].y
                     mx, my = (ax + bx) / 2.0, (ay + by) / 2.0
-                    thick = max(2, int(5 * camera.zoom_scale))
+                    thick = max(3, int(7.5 * camera.zoom_scale))
                     app_state["fading_beams"].append([ax, ay, mx - 2, my, thick, 1.0, -1.0])
                     app_state["fading_beams"].append([mx + 2, my, bx, by, thick, 1.0, -1.5])
                     
@@ -330,7 +332,7 @@ while app_state["is_running"]:
     ui_manager.draw_sidebar(
         screen, truss, sim_ctrl, app_state["current_mode"], app_state["show_benchmark_hud"], 
         app_state["is_optimizing"], app_state["trails_enabled"], app_state["allow_profile_switching"], 
-        ui_rects, calculate_utilization
+        ui_rects, calculate_utilization, app_state["show_stress_heatmap"]
     )
 
     sim_zone_surface = pygame.Surface((sim_rect.width, sim_rect.height))
@@ -384,8 +386,8 @@ while app_state["is_running"]:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        thickness_pixels = max(2, int(5 * camera.zoom_scale))
-        draw_road_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, road, thickness_pixels, get_stress_color(road, truss), i == app_state["selected_road_idx"])
+        thickness_pixels = max(3, int(7.5 * camera.zoom_scale))
+        draw_road_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, road, thickness_pixels, i == app_state["selected_road_idx"], truss, app_state["show_stress_heatmap"])
 
     for i, beam in enumerate(truss.beams):
         if beam.status == "FRACTURED": continue
@@ -399,8 +401,8 @@ while app_state["is_running"]:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        thickness_pixels = max(2, int(5 * camera.zoom_scale))
-        draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, get_stress_color(beam, truss), i == app_state["selected_beam_idx"], camera.zoom_scale, truss)
+        thickness_pixels = max(3, int(7.5 * camera.zoom_scale))
+        draw_curved_beam(sim_zone_surface, local_ax, local_ay, local_bx, local_by, beam, thickness_pixels, i == app_state["selected_beam_idx"], camera.zoom_scale, truss, app_state["show_stress_heatmap"])
 
     for i, cable in enumerate(truss.cables):
         if cable.status == "FRACTURED": continue
@@ -414,8 +416,8 @@ while app_state["is_running"]:
         local_bx = round(sx-sim_rect.left)
         local_by = round(sy-sim_rect.top)
 
-        thickness_pixels = max(2, int(5 * camera.zoom_scale))
-        draw_cable_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, cable, thickness_pixels, get_stress_color(cable, truss), i == app_state["selected_cable_idx"], camera.zoom_scale, truss, sim_ctrl)
+        thickness_pixels = max(3, int(7.5 * camera.zoom_scale))
+        draw_cable_element(sim_zone_surface, local_ax, local_ay, local_bx, local_by, cable, thickness_pixels, i == app_state["selected_cable_idx"], camera.zoom_scale, truss, sim_ctrl, app_state["show_stress_heatmap"])
 
     for fb in app_state["fading_beams"]:
         alpha = int(fb[5] * 255)

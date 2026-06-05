@@ -101,6 +101,17 @@ def draw_force_vector(surface, cx, cy, fx, fy, zoom_scale, color=COLOR_LOAD):
     angle = math.atan2(cy - start_y, cx - start_x)
     pygame.draw.polygon(surface, color, [(cx, cy), (cx - wing_len * math.cos(angle + 0.4), cy - wing_len * math.sin(angle + 0.4)), (cx - wing_len * math.cos(angle - 0.4), cy - wing_len * math.sin(angle - 0.4))])
 
+def get_material_colors(elem):
+    if getattr(elem, "is_cable", False):
+        if elem.material == "Steel Wire Rope": return COLOR_ROPE_STEEL_1, COLOR_ROPE_STEEL_2
+        elif elem.material == "Polyester Rope": return COLOR_ROPE_POLY_1, COLOR_ROPE_POLY_2
+        else: return COLOR_ROPE_NYLON_1, COLOR_ROPE_NYLON_2
+    if getattr(elem, "is_road", False):
+        return COLOR_MAT_ROAD_DECK, COLOR_MAT_ROAD_DECK
+    if elem.material == "Aluminum": return COLOR_MAT_ALUM_OUT, COLOR_MAT_ALUM_IN
+    if elem.material == "Titanium": return COLOR_MAT_TITA_OUT, COLOR_MAT_TITA_IN
+    return COLOR_MAT_STEEL_OUT, COLOR_MAT_STEEL_IN
+
 def draw_profile_preview(surf, x, y, width, height, beam):
     pygame.draw.rect(surf, (12, 12, 14), (x, y, width, height), border_radius=4)
     pygame.draw.rect(surf, COLOR_UI_BORDER, (x, y, width, height), width=1, border_radius=4)
@@ -109,7 +120,8 @@ def draw_profile_preview(surf, x, y, width, height, beam):
     max_d = 0.32 
     scale = (width - 16) / max_d
     outer_dim = max(6, min(width - 12, int(beam.dim_w * scale)))
-    color_fill = (55, 65, 81)
+    c_out, _ = get_material_colors(beam)
+    color_fill = c_out
     color_line = COLOR_TEXT_MUTED
     if beam.profile == "Square Tube":
         ox, oy = center_x - outer_dim // 2, center_y - outer_dim // 2
@@ -147,12 +159,69 @@ def draw_profile_preview(surf, x, y, width, height, beam):
         pygame.draw.rect(surf, color_fill, (ox, oy, w, h))
         pygame.draw.rect(surf, color_line, (ox, oy, w, h), width=1)
 
-def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selected, zoom_scale, truss):
+def draw_thick_line(surface, color, p1, p2, thickness):
+    dx = p2[0] - p1[0]
+    dy = p2[1] - p1[1]
+    L = math.hypot(dx, dy)
+    if L < 1e-4: return
+    nx = -dy / L * (thickness / 2.0)
+    ny = dx / L * (thickness / 2.0)
+    pygame.draw.polygon(surface, color, [
+        (p1[0] + nx, p1[1] + ny),
+        (p1[0] - nx, p1[1] - ny),
+        (p2[0] - nx, p2[1] - ny),
+        (p2[0] + nx, p2[1] + ny)
+    ])
+
+def draw_thick_polyline(surface, color, pts, thickness):
+    for i in range(len(pts) - 1):
+        draw_thick_line(surface, color, pts[i], pts[i+1], thickness)
+        if i < len(pts) - 2:
+            pygame.draw.circle(surface, color, (int(pts[i+1][0]), int(pts[i+1][1])), int(thickness / 2.0))
+
+def draw_striped_polyline(surface, c1, c2, pts, thickness):
+    draw_thick_polyline(surface, c1, pts, thickness)
+    dash_len = max(thickness * 1.5, 4.0)
+    curr_dist = 0.0
+    for i in range(len(pts) - 1):
+        p1 = pts[i]
+        p2 = pts[i+1]
+        dx = p2[0] - p1[0]
+        dy = p2[1] - p1[1]
+        seg_len = math.hypot(dx, dy)
+        if seg_len < 1e-5: continue
+        nx = dx / seg_len
+        ny = dy / seg_len
+        drawn = 0.0
+        while drawn < seg_len:
+            remain_dash = dash_len - (curr_dist % dash_len)
+            draw_len = min(remain_dash, seg_len - drawn)
+            is_c2 = int((curr_dist + 1e-5) / dash_len) % 2 == 1
+            if is_c2:
+                start_x = p1[0] + nx * drawn
+                start_y = p1[1] + ny * drawn
+                end_x = start_x + nx * draw_len
+                end_y = start_y + ny * draw_len
+                draw_thick_line(surface, c2, (start_x, start_y), (end_x, end_y), thickness)
+            drawn += draw_len
+            curr_dist += draw_len
+
+def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, is_selected, zoom_scale, truss, show_stress):
     if beam.status != "YIELDING" or beam.force == 0.0:
-        if is_selected:
-            pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
-        pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
+        if show_stress:
+            color = get_stress_color(beam, truss)
+            if is_selected:
+                draw_thick_line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+            draw_thick_line(surface, color, (ax, ay), (bx, by), thickness)
+        else:
+            c_out, c_in = get_material_colors(beam)
+            if is_selected:
+                draw_thick_line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+            draw_thick_line(surface, c_out, (ax, ay), (bx, by), thickness)
+            inner_thick = max(1, int(thickness * 0.375))
+            draw_thick_line(surface, c_in, (ax, ay), (bx, by), inner_thick)
         return
+
     dx = bx - ax
     dy = by - ay
     L_pixels = math.hypot(dx, dy)
@@ -180,11 +249,21 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
         x_curve = x_line + nx * offset
         y_curve = y_line + ny * offset
         points.append((x_curve, y_curve))
-    if is_selected:
-        pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, points, thickness + 4)
-    pygame.draw.lines(surface, color, False, points, thickness)
 
-def draw_cable_element(surface, ax, ay, bx, by, cable, thickness, color, is_selected, zoom_scale, truss, sim_ctrl):
+    if show_stress:
+        color = get_stress_color(beam, truss)
+        if is_selected:
+            draw_thick_polyline(surface, COLOR_HIGHLIGHT, points, thickness + 4)
+        draw_thick_polyline(surface, color, points, thickness)
+    else:
+        c_out, c_in = get_material_colors(beam)
+        if is_selected:
+            draw_thick_polyline(surface, COLOR_HIGHLIGHT, points, thickness + 4)
+        draw_thick_polyline(surface, c_out, points, thickness)
+        inner_thick = max(1, int(thickness * 0.375))
+        draw_thick_polyline(surface, c_in, points, inner_thick)
+
+def draw_cable_element(surface, ax, ay, bx, by, cable, thickness, is_selected, zoom_scale, truss, sim_ctrl, show_stress):
     dx = bx - ax
     dy = by - ay
     L_pixels = math.hypot(dx, dy)
@@ -220,15 +299,35 @@ def draw_cable_element(surface, ax, ay, bx, by, cable, thickness, color, is_sele
             y = u*u*ay + 2*u*tt*ctrl_y + tt*tt*by
             pts.append((x, y))
         
-        if is_selected:
-            pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, pts, thickness + 4)
-        pygame.draw.lines(surface, color, False, pts, thickness)
+        if show_stress:
+            color = get_stress_color(cable, truss)
+            if is_selected:
+                draw_thick_polyline(surface, COLOR_HIGHLIGHT, pts, thickness + 4)
+            draw_thick_polyline(surface, color, pts, thickness)
+        else:
+            c1, c2 = get_material_colors(cable)
+            if is_selected:
+                draw_thick_polyline(surface, COLOR_HIGHLIGHT, pts, thickness + 4)
+            draw_striped_polyline(surface, c1, c2, pts, thickness)
     else:
-        if is_selected:
-            pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
-        pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
+        pts = [(ax, ay), (bx, by)]
+        if show_stress:
+            color = get_stress_color(cable, truss)
+            if is_selected:
+                draw_thick_line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+            draw_thick_line(surface, color, (ax, ay), (bx, by), thickness)
+        else:
+            c1, c2 = get_material_colors(cable)
+            if is_selected:
+                draw_thick_line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+            draw_striped_polyline(surface, c1, c2, pts, thickness)
 
-def draw_road_element(surface, ax, ay, bx, by, road, thickness, color, is_selected):
+def draw_road_element(surface, ax, ay, bx, by, road, thickness, is_selected, truss, show_stress):
+    if show_stress:
+        color = get_stress_color(road, truss)
+    else:
+        color, _ = get_material_colors(road)
+        
     if is_selected:
-        pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
-    pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)
+        draw_thick_line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+    draw_thick_line(surface, color, (ax, ay), (bx, by), thickness)

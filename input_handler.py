@@ -317,6 +317,8 @@ class InputHandler:
                         if sim_ctrl.state != "EDIT":
                             sim_ctrl.reset(truss)
                             trigger_status("DYNAMIC SIMULATION RESET")
+                    elif ui_rects["btn_stress"].collidepoint(event.pos):
+                        app_state["show_stress_heatmap"] = not app_state["show_stress_heatmap"]
                     elif ui_rects["btn_s25"].collidepoint(event.pos): sim_ctrl.set_speed(0.25)
                     elif ui_rects["btn_s50"].collidepoint(event.pos): sim_ctrl.set_speed(0.5)
                     elif ui_rects["btn_s10"].collidepoint(event.pos): sim_ctrl.set_speed(1.0)
