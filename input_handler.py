@@ -1,7 +1,7 @@
 import pygame
 import math
 import json
-from truss_model import TrussSystem, Node, Beam
+from truss_model import TrussSystem, Node, Beam, Cable
 from constants import CLICK_TOLERANCE, GRID_SIZE, sim_rect
 from serialization import save_project_dialog, load_project_dialog
 from materials import MaterialManager
@@ -12,7 +12,8 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
         "self_weight_enabled": base_truss.self_weight_enabled,
         "active_material": base_truss.active_material,
         "nodes": [n.to_dict() for n in base_truss.nodes],
-        "beams": [b.to_dict() for b in base_truss.beams]
+        "beams": [b.to_dict() for b in base_truss.beams],
+        "cables": [c.to_dict() for c in base_truss.cables]
     })
     
     run_histories = []
@@ -24,6 +25,8 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
         test_truss.active_material = data["active_material"]
         for n_data in data["nodes"]: test_truss.nodes.append(Node.from_dict(n_data))
         for b_data in data["beams"]: test_truss.beams.append(Beam.from_dict(b_data))
+        if "cables" in data:
+            for c_data in data["cables"]: test_truss.cables.append(Cable.from_dict(c_data))
         
         sim = PhysicsSimulation(test_truss, gravity_mult=1.0, enable_gravity=test_truss.self_weight_enabled)
         
@@ -42,7 +45,7 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
                     c.beam.force = c.beam.stress * c.beam.area
             
             beams_to_break = []
-            for b_idx, b in enumerate(test_truss.beams):
+            for b_idx, b in enumerate(test_truss.beams + test_truss.cables):
                 if b.status == "FRACTURED": continue
                 ult = MaterialManager.get_ultimate_stress(b.material)
                 yield_s = MaterialManager.get_yield_stress(b.material)
@@ -55,7 +58,7 @@ def run_determinism_test(base_truss, num_runs=3, frames=180):
                 b.status = "FRACTURED"
                 sim.remove_constraints_for_beam(b)
                 
-            frame_hash = sum([round(p.x + p.y + p.vx + p.vy, 4) for p in sim.particles]) + sum([1 for b in test_truss.beams if b.status == "FRACTURED"])
+            frame_hash = sum([round(p.x + p.y + p.vx + p.vy, 4) for p in sim.particles]) + sum([1 for b in test_truss.beams + test_truss.cables if b.status == "FRACTURED"])
             history.append(frame_hash)
             
         run_histories.append(history)
@@ -123,6 +126,7 @@ class InputHandler:
                         if success:
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
+                            app_state["selected_cable_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["gravity_multiplier"] = 0.0
                             app_state["first_break_gravity"] = None
@@ -172,6 +176,7 @@ class InputHandler:
                         app_state["active_node_bnd"] = None
                         app_state["selected_node_idx"] = None
                         app_state["selected_beam_idx"] = None
+                        app_state["selected_cable_idx"] = None
                         app_state["gravity_multiplier"] = 0.0
                         app_state["first_break_gravity"] = None
                         app_state["fading_beams"].clear()
@@ -189,6 +194,7 @@ class InputHandler:
                             truss.load_benchmark_case()
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
+                            app_state["selected_cable_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["first_break_gravity"] = None
                             app_state["is_optimizing"] = False
@@ -199,47 +205,72 @@ class InputHandler:
                     elif event.key == pygame.K_p and app_state["selected_beam_idx"] is not None:
                         truss.beams[app_state["selected_beam_idx"]].cycle_profile()
                         app_state["first_break_gravity"] = None
-                    elif event.key == pygame.K_LEFTBRACKET and app_state["selected_beam_idx"] is not None:
+                    elif event.key == pygame.K_LEFTBRACKET:
                         mods = pygame.key.get_mods()
-                        b = truss.beams[app_state["selected_beam_idx"]]
-                        if mods & pygame.KMOD_SHIFT:
-                            if b.profile != "Solid Bar":
-                                b.dim_t = max(0.001, b.dim_t - 0.001)
+                        if app_state["selected_beam_idx"] is not None:
+                            b = truss.beams[app_state["selected_beam_idx"]]
+                            if mods & pygame.KMOD_SHIFT:
+                                if b.profile != "Solid Bar":
+                                    b.dim_t = max(0.001, b.dim_t - 0.001)
+                                    b.recalculate_geometry()
+                            else:
+                                b.dim_w = max(0.01, b.dim_w - 0.005)
+                                if b.profile != "Solid Bar" and b.dim_t > b.dim_w * 0.45:
+                                    b.dim_t = b.dim_w * 0.45
                                 b.recalculate_geometry()
-                        else:
-                            b.dim_w = max(0.01, b.dim_w - 0.005)
-                            if b.profile != "Solid Bar" and b.dim_t > b.dim_w * 0.45:
-                                b.dim_t = b.dim_w * 0.45
-                            b.recalculate_geometry()
+                        elif app_state["selected_cable_idx"] is not None:
+                            c = truss.cables[app_state["selected_cable_idx"]]
+                            if not mods & pygame.KMOD_SHIFT:
+                                c.adjust_dimension(-0.005)
                         app_state["first_break_gravity"] = None
-                    elif event.key == pygame.K_RIGHTBRACKET and app_state["selected_beam_idx"] is not None:
+                    elif event.key == pygame.K_RIGHTBRACKET:
                         mods = pygame.key.get_mods()
-                        b = truss.beams[app_state["selected_beam_idx"]]
-                        if mods & pygame.KMOD_SHIFT:
-                            if b.profile != "Solid Bar":
-                                b.dim_t = min(b.dim_w * 0.45, b.dim_t + 0.001)
+                        if app_state["selected_beam_idx"] is not None:
+                            b = truss.beams[app_state["selected_beam_idx"]]
+                            if mods & pygame.KMOD_SHIFT:
+                                if b.profile != "Solid Bar":
+                                    b.dim_t = min(b.dim_w * 0.45, b.dim_t + 0.001)
+                                    b.recalculate_geometry()
+                            else:
+                                b.dim_w = min(0.32, b.dim_w + 0.005)
                                 b.recalculate_geometry()
-                        else:
-                            b.dim_w = min(0.32, b.dim_w + 0.005)
-                            b.recalculate_geometry()
+                        elif app_state["selected_cable_idx"] is not None:
+                            c = truss.cables[app_state["selected_cable_idx"]]
+                            if not mods & pygame.KMOD_SHIFT:
+                                c.adjust_dimension(0.005)
                         app_state["first_break_gravity"] = None
-                    elif event.key == pygame.K_m and app_state["selected_beam_idx"] is not None:
-                        b = truss.beams[app_state["selected_beam_idx"]]
-                        next_m = MaterialManager.get_next_material(b.material)
-                        b.update_material_properties(next_m)
-                        b.reset_status()
-                        app_state["first_break_gravity"] = None
+                    elif event.key == pygame.K_m:
+                        if app_state["selected_beam_idx"] is not None:
+                            b = truss.beams[app_state["selected_beam_idx"]]
+                            next_m = MaterialManager.get_next_material(b.material, False)
+                            b.update_material_properties(next_m)
+                            b.reset_status()
+                            app_state["first_break_gravity"] = None
+                        elif app_state["selected_cable_idx"] is not None:
+                            c = truss.cables[app_state["selected_cable_idx"]]
+                            next_m = MaterialManager.get_next_material(c.material, True)
+                            c.update_material_properties(next_m)
+                            c.reset_status()
+                            app_state["first_break_gravity"] = None
                     elif event.key in (pygame.K_DELETE, pygame.K_BACKSPACE):
                         if app_state["selected_beam_idx"] is not None:
                             truss.beams.pop(app_state["selected_beam_idx"])
                             app_state["selected_beam_idx"] = None
                             app_state["first_break_gravity"] = None
+                        elif app_state["selected_cable_idx"] is not None:
+                            truss.cables.pop(app_state["selected_cable_idx"])
+                            app_state["selected_cable_idx"] = None
+                            app_state["first_break_gravity"] = None
                         elif app_state["selected_node_idx"] is not None:
                             idx = app_state["selected_node_idx"]
                             truss.beams = [b for b in truss.beams if b.node_a != idx and b.node_b != idx]
+                            truss.cables = [c for c in truss.cables if c.node_a != idx and c.node_b != idx]
                             for b in truss.beams:
                                 if b.node_a > idx: b.node_a -= 1
                                 if b.node_b > idx: b.node_b -= 1
+                            for c in truss.cables:
+                                if c.node_a > idx: c.node_a -= 1
+                                if c.node_b > idx: c.node_b -= 1
                             truss.nodes.pop(idx)
                             app_state["selected_node_idx"] = None
                             app_state["first_break_gravity"] = None
@@ -291,6 +322,8 @@ class InputHandler:
                         app_state["current_mode"], app_state["input_active"] = "NODE", False
                     elif ui_rects["btn_beam"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
                         app_state["current_mode"], app_state["input_active"] = "BEAM", False
+                    elif ui_rects["btn_cable"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
+                        app_state["current_mode"], app_state["input_active"] = "CABLE", False
                     elif ui_rects["btn_load"].collidepoint(event.pos) and sim_ctrl.state == "EDIT": 
                         app_state["current_mode"], app_state["input_active"] = "LOAD", False
                     elif ui_rects["btn_benchmark"].collidepoint(event.pos) and sim_ctrl.state == "EDIT":
@@ -299,6 +332,7 @@ class InputHandler:
                             truss.load_benchmark_case()
                             app_state["selected_node_idx"] = None
                             app_state["selected_beam_idx"] = None
+                            app_state["selected_cable_idx"] = None
                             app_state["active_node_bnd"] = None
                             app_state["first_break_gravity"] = None
                             app_state["is_optimizing"] = False
@@ -325,26 +359,40 @@ class InputHandler:
                     if app_state["current_mode"] == "LOAD" and clicked_node_idx is not None: 
                         app_state["selected_node_idx"] = clicked_node_idx
                         app_state["selected_beam_idx"] = None
+                        app_state["selected_cable_idx"] = None
                     elif app_state["current_mode"] == "SELECT":
                         app_state["selected_node_idx"] = clicked_node_idx
                         app_state["selected_beam_idx"] = None
+                        app_state["selected_cable_idx"] = None
                         if clicked_node_idx is None:
+                            found = False
                             for i, b in enumerate(truss.beams):
                                 if b.status == "FRACTURED": continue
                                 if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[b.node_a].x, truss.nodes[b.node_a].y, truss.nodes[b.node_b].x, truss.nodes[b.node_b].y) < (8 / camera.zoom_scale):
                                     app_state["selected_beam_idx"] = i
+                                    found = True
+                                    break
+                            if not found:
+                                for i, c in enumerate(truss.cables):
+                                    if c.status == "FRACTURED": continue
+                                    if point_to_line_distance(sim_mouse_x, sim_mouse_y, truss.nodes[c.node_a].x, truss.nodes[c.node_a].y, truss.nodes[c.node_b].x, truss.nodes[c.node_b].y) < (8 / camera.zoom_scale):
+                                        app_state["selected_cable_idx"] = i
+                                        break
                     elif app_state["current_mode"] == "NODE":
                         sim_mouse_x = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_x))
                         sim_mouse_y = max(-camera.WORKSPACE_LIMIT, min(camera.WORKSPACE_LIMIT, sim_mouse_y))
                         truss.add_node(sim_mouse_x, sim_mouse_y, snap_enabled=app_state["grid_enabled"], grid_size=GRID_SIZE)
                         app_state["first_break_gravity"] = None
                         app_state["show_benchmark_hud"] = False
-                    elif app_state["current_mode"] == "BEAM":
+                    elif app_state["current_mode"] in ["BEAM", "CABLE"]:
                         if clicked_node_idx is not None:
                             if app_state["active_node_bnd"] is None: 
                                 app_state["active_node_bnd"] = clicked_node_idx
                             else:
-                                truss.add_beam(app_state["active_node_bnd"], clicked_node_idx)
+                                if app_state["current_mode"] == "BEAM":
+                                    truss.add_beam(app_state["active_node_bnd"], clicked_node_idx)
+                                else:
+                                    truss.add_cable(app_state["active_node_bnd"], clicked_node_idx)
                                 app_state["active_node_bnd"] = None
                                 app_state["first_break_gravity"] = None
                                 app_state["show_benchmark_hud"] = False

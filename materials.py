@@ -3,57 +3,34 @@ from constants import MATERIAL_SPECS
 
 PROFILE_TYPES = ["Square Tube", "H-Beam", "Solid Bar"]
 
-
 class MaterialManager:
-    """
-    Centralized material and geometric property calculations.
-    All material science, cross-sectional properties, and profile handling 
-    lives here to keep Beam class focused on structural network logic.
-    """
     
     @staticmethod
     def get_material_specs(material_name):
-        """Get full material spec dict (yield, ultimate, density, label, modulus)."""
         return MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
     
     @staticmethod
     def get_yield_stress(material_name):
-        """Get yield stress in Pa for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
         return specs["yield"]
     
     @staticmethod
     def get_ultimate_stress(material_name):
-        """Get ultimate tensile stress in Pa for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
         return specs.get("ultimate", specs["yield"] * 1.6)
     
     @staticmethod
     def get_modulus(material_name):
-        """Get Young's modulus in Pa for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
         return specs.get("modulus", 200e9)
     
     @staticmethod
     def get_density(material_name):
-        """Get density in kg/m³ for a material."""
         specs = MATERIAL_SPECS.get(material_name, MATERIAL_SPECS["Steel"])
         return specs.get("density", 7850)
     
     @staticmethod
     def calculate_area_inertia(profile, dim_w, dim_t):
-        """
-        Calculate cross-sectional area (m²) and moment of inertia (m⁴) 
-        based on profile type and dimensions.
-        
-        Args:
-            profile: One of "Square Tube", "H-Beam", "Solid Bar"
-            dim_w: Width/diameter in meters
-            dim_t: Thickness in meters (ignored for Solid Bar)
-            
-        Returns:
-            tuple: (area in m², moment_of_inertia in m⁴)
-        """
         if profile == "Solid Round":
             radius = dim_w / 2.0
             area = math.pi * (radius ** 2)
@@ -84,17 +61,6 @@ class MaterialManager:
     
     @staticmethod
     def calculate_buckling_load(material_name, inertia, length_m):
-        """
-        Calculate Euler buckling critical load in Newtons.
-        
-        Args:
-            material_name: Material type (Steel, Aluminum, Titanium)
-            inertia: Moment of inertia in m⁴
-            length_m: Beam length in meters
-            
-        Returns:
-            float: Critical buckling load in N, or inf if length <= 0
-        """
         if length_m <= 0:
             return float('inf')
         modulus = MaterialManager.get_modulus(material_name)
@@ -102,7 +68,6 @@ class MaterialManager:
     
     @staticmethod
     def get_next_profile(current_profile):
-        """Cycle to next profile type in rotation."""
         try:
             idx = PROFILE_TYPES.index(current_profile)
             return PROFILE_TYPES[(idx + 1) % len(PROFILE_TYPES)]
@@ -111,19 +76,6 @@ class MaterialManager:
     
     @staticmethod
     def adjust_dimensions(profile, dim_w, dim_t, delta):
-        """
-        Adjust beam dimensions by delta.
-        Solid Bar only adjusts width, tubed profiles adjust both.
-        
-        Args:
-            profile: Profile type
-            dim_w: Current width/diameter
-            dim_t: Current thickness
-            delta: Change amount (+ increases, - decreases)
-            
-        Returns:
-            tuple: (new_dim_w, new_dim_t)
-        """
         if profile == "Solid Bar":
             new_w = max(0.01, min(0.32, dim_w + delta))
             return new_w, dim_t
@@ -136,11 +88,13 @@ class MaterialManager:
             return new_w, new_t
     
     @staticmethod
-    def get_next_material(current_material):
-        """Cycle to next material type in rotation (Steel -> Aluminum -> Titanium -> Steel)."""
-        materials = ["Steel", "Aluminum", "Titanium"]
+    def get_next_material(current_material, is_cable=False):
+        if is_cable:
+            materials = ["Steel Wire Rope", "Polyester Rope", "Nylon Rope"]
+        else:
+            materials = ["Steel", "Aluminum", "Titanium"]
         try:
             idx = materials.index(current_material)
             return materials[(idx + 1) % len(materials)]
         except ValueError:
-            return "Steel"
+            return materials[0]

@@ -36,7 +36,7 @@ class SimulationController:
             self.physics_sim = None
             if self.saved_truss_state:
                 self.restore_state(truss, self.saved_truss_state)
-            for b in truss.beams:
+            for b in truss.beams + truss.cables:
                 b.reset_status()
             truss.reset_sim_stats()
             self.time_accumulator = 0.0

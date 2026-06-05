@@ -34,27 +34,37 @@ def find_proxy_limit(beam, truss):
         return abs(min_dist), target_node_idx
     return float('inf'), None
 
-def get_stress_color(beam, truss):
-    if beam.status == "FRACTURED" or beam.force == 0.0:
+def get_stress_color(elem, truss):
+    if elem.status == "FRACTURED":
         return (180, 180, 185)
-    if beam.status == "YIELDING":
-        limit, proxy_node = find_proxy_limit(beam, truss)
+        
+    is_cable = getattr(elem, "is_cable", False)
+    if is_cable and elem.force <= 1e-4:
+        return COLOR_CABLE
+        
+    if elem.force == 0.0:
+        return (180, 180, 185)
+        
+    if elem.status == "YIELDING":
+        limit, proxy_node = find_proxy_limit(elem, truss)
         if proxy_node is not None:
-            yield_stress = MaterialManager.get_yield_stress(beam.material)
-            util = abs(beam.stress) / yield_stress
+            yield_stress = MaterialManager.get_yield_stress(elem.material)
+            util = abs(elem.stress) / yield_stress
             if min(35.0, (util - 0.95) * 18.0) >= limit:
                 return (220, 38, 38)
         pulse = (math.sin(pygame.time.get_ticks() * 0.01) + 1.0) / 2.0
         return (int(249 - pulse * 15), int(115 + pulse * 25), int(22 - pulse * 10))
-    yield_stress = MaterialManager.get_yield_stress(beam.material)
-    yield_util = abs(beam.stress) / yield_stress
-    is_compression = beam.stress < -1e-2
-    if is_compression:
-        length_m = truss.get_beam_length(beam)
+        
+    yield_stress = MaterialManager.get_yield_stress(elem.material)
+    yield_util = abs(elem.stress) / yield_stress
+    is_compression = elem.stress < -1e-2
+    
+    if is_compression and not is_cable:
+        length_m = truss.get_beam_length(elem)
         buckle_util = 0.0
         if length_m > 0:
-            p_crit = MaterialManager.calculate_buckling_load(beam.material, beam.inertia, length_m)
-            buckle_util = abs(beam.force) / p_crit
+            p_crit = MaterialManager.calculate_buckling_load(elem.material, elem.inertia, length_m)
+            buckle_util = abs(elem.force) / p_crit
         utilization = max(yield_util, buckle_util)
         if utilization >= 1.0: return COLOR_MAX_LOAD
         if buckle_util > yield_util:
@@ -69,6 +79,9 @@ def get_stress_color(beam, truss):
     else:
         utilization = yield_util
         if utilization >= 1.0: return (59, 130, 246)
+        if is_cable:
+            t = utilization
+            return (max(0, min(255, int(156 + (234 - 156) * t))), max(0, min(255, int(163 + (179 - 163) * t))), max(0, min(255, int(175 - (175 - 8) * t))))
         t = utilization
         return (max(0, min(255, int(180 - (180 - 34) * t))), max(0, min(255, int(180 + (211 - 180) * t))), max(0, min(255, int(185 + (238 - 185) * t))))
 
@@ -161,3 +174,47 @@ def draw_curved_beam(surface, ax, ay, bx, by, beam, thickness, color, is_selecte
     if is_selected:
         pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, points, thickness + 4)
     pygame.draw.lines(surface, color, False, points, thickness)
+
+def draw_cable_element(surface, ax, ay, bx, by, cable, thickness, color, is_selected, zoom_scale, truss, sim_ctrl):
+    dx = bx - ax
+    dy = by - ay
+    L_pixels = math.hypot(dx, dy)
+    if L_pixels < 1: return
+    
+    is_slack = cable.force <= 1e-4
+    
+    if is_slack and cable.status != "FRACTURED":
+        L_curr_m = (L_pixels / zoom_scale) * 0.0125
+        
+        if sim_ctrl.state != "EDIT" and sim_ctrl.saved_truss_state is not None:
+            na = sim_ctrl.saved_truss_state[cable.node_a]
+            nb = sim_ctrl.saved_truss_state[cable.node_b]
+            L_rest_m = math.hypot(nb["x"] - na["x"], nb["y"] - na["y"]) * 0.0125
+        else:
+            L_rest_m = truss.get_beam_length(cable)
+            
+        if L_curr_m < L_rest_m - 1e-5:
+            diff = L_rest_m - L_curr_m
+            droop_m = math.sqrt((0.375 * L_curr_m * diff) + (0.25 * diff * diff))
+            droop_px = (droop_m / 0.0125) * zoom_scale
+        else:
+            droop_px = 1.0 * zoom_scale 
+            
+        ctrl_x = (ax + bx) / 2.0
+        ctrl_y = ((ay + by) / 2.0) + (droop_px * 2.0)
+        
+        pts = []
+        for t in range(13):
+            tt = t / 12.0
+            u = 1.0 - tt
+            x = u*u*ax + 2*u*tt*ctrl_x + tt*tt*bx
+            y = u*u*ay + 2*u*tt*ctrl_y + tt*tt*by
+            pts.append((x, y))
+        
+        if is_selected:
+            pygame.draw.lines(surface, COLOR_HIGHLIGHT, False, pts, thickness + 4)
+        pygame.draw.lines(surface, color, False, pts, thickness)
+    else:
+        if is_selected:
+            pygame.draw.line(surface, COLOR_HIGHLIGHT, (ax, ay), (bx, by), thickness + 4)
+        pygame.draw.line(surface, color, (ax, ay), (bx, by), thickness)

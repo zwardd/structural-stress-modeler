@@ -40,12 +40,12 @@ class PhysicsSimulation:
         num_nodes = len(truss.nodes)
         node_masses = [0.1 for _ in range(num_nodes)]
 
-        for beam in truss.beams:
-            if beam.status == "FRACTURED":
+        for elem in truss.beams + truss.cables:
+            if elem.status == "FRACTURED":
                 continue
-            beam_mass = truss.get_beam_length(beam) * beam.area * beam.density
-            node_masses[beam.node_a] += beam_mass / 2.0
-            node_masses[beam.node_b] += beam_mass / 2.0
+            elem_mass = truss.get_beam_length(elem) * elem.area * elem.density
+            node_masses[elem.node_a] += elem_mass / 2.0
+            node_masses[elem.node_b] += elem_mass / 2.0
 
         for i, node in enumerate(truss.nodes):
             m = node_masses[i]
@@ -60,20 +60,20 @@ class PhysicsSimulation:
             )
             self.particles.append(p)
 
-        for beam in truss.beams:
-            if beam.status == "FRACTURED":
+        for elem in truss.beams + truss.cables:
+            if elem.status == "FRACTURED":
                 continue
-            dx = truss.nodes[beam.node_b].x - truss.nodes[beam.node_a].x
-            dy = truss.nodes[beam.node_b].y - truss.nodes[beam.node_a].y
+            dx = truss.nodes[elem.node_b].x - truss.nodes[elem.node_a].x
+            dy = truss.nodes[elem.node_b].y - truss.nodes[elem.node_a].y
             rest_len = math.sqrt(dx * dx + dy * dy)
-            c = PhysicsConstraint(beam.node_a, beam.node_b, rest_len, beam)
+            c = PhysicsConstraint(elem.node_a, elem.node_b, rest_len, elem)
             self.constraints.append(c)
 
         self.particles.sort(key=lambda p: p.node_idx)
         self.constraints.sort(key=lambda c: (min(c.p1_idx, c.p2_idx), max(c.p1_idx, c.p2_idx)))
 
-    def remove_constraints_for_beam(self, beam):
-        self.constraints = [c for c in self.constraints if c.beam is not beam and c.beam != beam]
+    def remove_constraints_for_beam(self, elem):
+        self.constraints = [c for c in self.constraints if c.beam is not elem and c.beam != elem]
 
     def step(self, gravity_mult):
         self.gravity = 9.81 * gravity_mult if self.enable_gravity else 0.0
@@ -137,7 +137,13 @@ class PhysicsSimulation:
                     alpha_tilde = alpha / dt_sq
                     
                     delta_lam = (-C_m - alpha_tilde * c.lam) / (w_sum + alpha_tilde)
-                    c.lam += delta_lam
+                    
+                    if getattr(c.beam, "is_cable", False):
+                        new_lam = min(0.0, c.lam + delta_lam)
+                        delta_lam = new_lam - c.lam
+                        c.lam = new_lam
+                    else:
+                        c.lam += delta_lam
                     
                     corr_px_1 = (-w1 * delta_lam) * 80.0
                     corr_px_2 = (w2 * delta_lam) * 80.0
@@ -145,14 +151,10 @@ class PhysicsSimulation:
                     nx = dx_px / dist_px
                     ny = dy_px / dist_px
                     
-                    if not p1.is_anchor_x:
-                        p1.x += corr_px_1 * nx
-                    if not p1.is_anchor_y:
-                        p1.y += corr_px_1 * ny
-                    if not p2.is_anchor_x:
-                        p2.x += corr_px_2 * nx
-                    if not p2.is_anchor_y:
-                        p2.y += corr_px_2 * ny
+                    if not p1.is_anchor_x: p1.x += corr_px_1 * nx
+                    if not p1.is_anchor_y: p1.y += corr_px_1 * ny
+                    if not p2.is_anchor_x: p2.x += corr_px_2 * nx
+                    if not p2.is_anchor_y: p2.y += corr_px_2 * ny
 
             for p in self.particles:
                 p.vx = ((p.x - p.px) / self.dt) * 0.9995
